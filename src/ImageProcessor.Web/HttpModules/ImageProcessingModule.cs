@@ -118,6 +118,10 @@ namespace ImageProcessor.Web.HttpModules
         /// </summary>
         public static event EventHandler<PostProcessingEventArgs> OnPostProcessing;
 
+        // WEBCENTRUM
+        public static Func<string, bool> FileExists { get; set; }
+        public static Func<string, bool> CachingFilter { get; set; }
+
         #region IHttpModule Members
         /// <summary>
         /// Initializes a module and prepares it to handle requests.
@@ -441,12 +445,10 @@ namespace ImageProcessor.Web.HttpModules
                             else
                             {
                                 using (Locker.Lock(cachedPath))
-                                {
+                                {   
                                     // Check to see if the file exists.
                                     // ReSharper disable once AssignNullToNotNullAttribute
-                                    FileInfo fileInfo = new FileInfo(requestPath);
-
-                                    if (!fileInfo.Exists)
+                                    if ((FileExists != null && !FileExists(requestPath)) && !File.Exists(requestPath))
                                     {
                                         throw new HttpException(404, "No image exists at " + fullPath);
                                     }
@@ -462,7 +464,12 @@ namespace ImageProcessor.Web.HttpModules
                                     // Store the cached path, response type, and cache dependencies in the context for later retrieval.
                                     context.Items[CachedPathKey] = cachedPath;
                                     context.Items[CachedResponseTypeKey] = imageFactory.CurrentImageFormat.MimeType;
-                                    context.Items[CachedResponseFileDependency] = new List<string> { requestPath, cachedPath };
+                                    var dependencies = new List<string> { cachedPath };
+                                    if (CachingFilter != null && CachingFilter(requestPath))
+	                                {
+		                                dependencies.Add(requestPath);
+	                                }
+                                    context.Items[CachedResponseFileDependency] = dependencies;
                                 }
                             }
                         }
@@ -489,7 +496,10 @@ namespace ImageProcessor.Web.HttpModules
                         context.Response.StatusCode = (int)HttpStatusCode.NotModified;
                         context.Response.SuppressContent = true;
 
-                        if (!isRemote)
+                        // WEBCENTRUM
+                        // This header causes the start of FileChangesMonitor on a directory in the DatabaseFileSystem when response is flushed
+                        // Added the Caching filter to allow more control
+                        if (!isRemote && (CachingFilter == null || CachingFilter(requestPath)))
                         {
                             // Set the headers and quit.
                             this.SetHeaders(context, (string)context.Items[CachedResponseTypeKey], new List<string> { requestPath, cachedPath });

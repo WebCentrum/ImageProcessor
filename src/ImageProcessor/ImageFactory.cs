@@ -124,6 +124,16 @@ namespace ImageProcessor
         /// Gets or sets the stream for storing any input stream to prevent disposal.
         /// </summary>
         internal Stream InputStream { get; set; }
+
+        /// <summary>
+        /// For opening files not on the fileSystem
+        /// </summary>
+        public static Func<string, Stream> OpenStream { get; set; }
+
+        /// <summary>
+        /// For opening files not on the fileSystem
+        /// </summary>
+        public static Func<string, bool> FileExists { get; set; }
         #endregion
 
         #region Methods
@@ -178,13 +188,13 @@ namespace ImageProcessor
         /// </returns>
         public ImageFactory Load(string imagePath)
         {
-            FileInfo fileInfo = new FileInfo(imagePath);
-            if (fileInfo.Exists)
+
+            if ((FileExists != null && FileExists(imagePath)) || File.Exists(imagePath))
             {
                 this.ImagePath = imagePath;
 
                 // Open a file stream to prevent the need for lock.
-                using (FileStream fileStream = new FileStream(imagePath, FileMode.Open, FileAccess.Read))
+                using (Stream fileStream = OpenFile(imagePath))
                 {
                     ISupportedImageFormat format = FormatUtilities.GetFormat(fileStream);
 
@@ -228,6 +238,13 @@ namespace ImageProcessor
             }
 
             return this;
+        }
+
+        private Stream OpenFile(string imagePath)
+        {
+            return OpenStream != null
+                ? OpenStream(imagePath)
+                : new FileStream(imagePath, FileMode.Open, FileAccess.Read);
         }
 
         /// <summary>
