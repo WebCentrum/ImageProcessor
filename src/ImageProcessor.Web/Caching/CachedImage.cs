@@ -1,6 +1,6 @@
 ﻿// --------------------------------------------------------------------------------------------------------------------
-// <copyright file="CachedImage.cs" company="James South">
-//   Copyright (c) James South.
+// <copyright file="CachedImage.cs" company="James Jackson-South">
+//   Copyright (c) James Jackson-South.
 //   Licensed under the Apache License, Version 2.0.
 // </copyright>
 // <summary>
@@ -15,7 +15,7 @@ namespace ImageProcessor.Web.Caching
     /// <summary>
     /// Describes a cached image 
     /// </summary>
-    internal sealed class CachedImage
+    public sealed class CachedImage
     {
         /// <summary>
         /// Gets or sets the key identifying the cached image.

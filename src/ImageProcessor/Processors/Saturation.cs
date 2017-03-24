@@ -1,6 +1,6 @@
 ﻿// --------------------------------------------------------------------------------------------------------------------
-// <copyright file="Saturation.cs" company="James South">
-//   Copyright (c) James South.
+// <copyright file="Saturation.cs" company="James Jackson-South">
+//   Copyright (c) James Jackson-South.
 //   Licensed under the Apache License, Version 2.0.
 // </copyright>
 // <summary>
@@ -82,6 +82,7 @@ namespace ImageProcessor.Processors
                 float saturationComplementB = 0.0820f * saturationComplement;
 
                 newImage = new Bitmap(image.Width, image.Height, PixelFormat.Format32bppPArgb);
+                newImage.SetResolution(image.HorizontalResolution, image.VerticalResolution);
 
                 ColorMatrix colorMatrix =
                     new ColorMatrix(
@@ -129,10 +130,7 @@ namespace ImageProcessor.Processors
             }
             catch (Exception ex)
             {
-                if (newImage != null)
-                {
-                    newImage.Dispose();
-                }
+                newImage?.Dispose();
 
                 throw new ImageProcessingException("Error processing image with " + this.GetType().Name, ex);
             }

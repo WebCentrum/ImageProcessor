@@ -1,6 +1,6 @@
 ﻿// --------------------------------------------------------------------------------------------------------------------
-// <copyright file="Filter.cs" company="James South">
-//   Copyright (c) James South.
+// <copyright file="Filter.cs" company="James Jackson-South">
+//   Copyright (c) James Jackson-South.
 //   Licensed under the Apache License, Version 2.0.
 // </copyright>
 // <summary>
@@ -16,7 +16,7 @@ namespace ImageProcessor.Processors
     using System.Drawing.Imaging;
 
     using ImageProcessor.Common.Exceptions;
-    using ImageProcessor.Imaging.Filters;
+    using ImageProcessor.Imaging.Filters.Photo;
 
     /// <summary>
     /// Encapsulates methods with which to add filters to an image.
@@ -66,20 +66,18 @@ namespace ImageProcessor.Processors
 
             try
             {
+                // TODO: Optimize this one day when I can break the API.
                 newImage = new Bitmap(image.Width, image.Height, PixelFormat.Format32bppPArgb);
+                newImage.SetResolution(image.HorizontalResolution, image.VerticalResolution);
                 IMatrixFilter matrix = this.DynamicParameter;
-
-                if (matrix != null)
-                {
-                    return matrix.TransformImage(factory, image, newImage);
-                }
+                newImage = matrix.TransformImage(image, newImage);
+                
+                image.Dispose();
+                image = newImage;
             }
             catch (Exception ex)
             {
-                if (newImage != null)
-                {
-                    newImage.Dispose();
-                }
+                newImage?.Dispose();
 
                 throw new ImageProcessingException("Error processing image with " + this.GetType().Name, ex);
             }

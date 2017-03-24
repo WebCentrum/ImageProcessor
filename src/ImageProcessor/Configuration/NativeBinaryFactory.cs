@@ -1,6 +1,6 @@
 ﻿// --------------------------------------------------------------------------------------------------------------------
-// <copyright file="NativeBinaryFactory.cs" company="James South">
-//   Copyright (c) James South.
+// <copyright file="NativeBinaryFactory.cs" company="James Jackson-South">
+//   Copyright (c) James Jackson-South.
 //   Licensed under the Apache License, Version 2.0.
 // </copyright>
 // <summary>
@@ -74,13 +74,7 @@ namespace ImageProcessor.Configuration
         /// <summary>
         /// Gets a value indicating whether the operating environment is 64 bit.
         /// </summary>
-        public bool Is64BitEnvironment
-        {
-            get
-            {
-                return Is64Bit;
-            }
-        }
+        public bool Is64BitEnvironment => Is64Bit;
 
         /// <summary>
         /// Registers any embedded native (unmanaged) binaries required by ImageProcessor.
@@ -101,7 +95,7 @@ namespace ImageProcessor.Configuration
                 b =>
                 {
                     IntPtr pointer;
-                    string folder = Is64BitEnvironment ? "x64" : "x86";
+                    string folder = this.Is64BitEnvironment ? "x64" : "x86";
                     Assembly assembly = Assembly.GetExecutingAssembly();
                     string targetBasePath = new Uri(assembly.Location).LocalPath;
                     string targetPath = Path.GetFullPath(Path.Combine(targetBasePath, "..\\" + folder + "\\" + name));
@@ -133,13 +127,8 @@ namespace ImageProcessor.Configuration
 
                     try
                     {
-#if !__MonoCS__
                         // Load the binary into memory.
                         pointer = NativeMethods.LoadLibrary(targetPath);
-#else
-                        // Load the binary into memory. The second parameter forces it to load immediately.
-                        pointer = NativeMethods.dlopen(targetPath, 2);
-#endif
                     }
                     catch (Exception ex)
                     {
@@ -163,7 +152,7 @@ namespace ImageProcessor.Configuration
             this.Dispose(true);
 
             // This object will be cleaned up by the Dispose method.
-            // Therefore, you should call GC.SupressFinalize to
+            // Therefore, you should call GC.SuppressFinalize to
             // take this object off the finalization queue 
             // and prevent finalization code for this object
             // from executing a second time.
@@ -203,13 +192,9 @@ namespace ImageProcessor.Configuration
             {
                 IntPtr pointer = nativeBinary.Value;
 
-#if !__MonoCS__
                 // According to http://stackoverflow.com/a/2445558/427899 you need to call this twice.
                 NativeMethods.FreeLibrary(pointer);
                 NativeMethods.FreeLibrary(pointer);
-#else
-                NativeMethods.dlclose(pointer);
-#endif
             }
         }
     }

@@ -1,6 +1,6 @@
 ﻿// --------------------------------------------------------------------------------------------------------------------
-// <copyright file="GifEncoder.cs" company="James South">
-//   Copyright (c) James South.
+// <copyright file="GifEncoder.cs" company="James Jackson-South">
+//   Copyright (c) James Jackson-South.
 //   Licensed under the Apache License, Version 2.0.
 // </copyright>
 // <summary>
@@ -17,6 +17,7 @@
 namespace ImageProcessor.Imaging.Formats
 {
     using System;
+    using System.Drawing;
     using System.Drawing.Imaging;
     using System.IO;
     using System.Linq;
@@ -24,13 +25,11 @@ namespace ImageProcessor.Imaging.Formats
     /// <summary>
     /// Encodes multiple images as an animated gif to a stream.
     /// <remarks>
-    /// Always wire this up in a using block.
-    /// Disposing the encoder will complete the file.
     /// Uses default .NET GIF encoding and adds animation headers.
     /// Adapted from <see href="http://github.com/DataDink/Bumpkit/blob/master/BumpKit/BumpKit/GifEncoder.cs"/>
     /// </remarks>
     /// </summary>
-    public class GifEncoder : IDisposable
+    public class GifEncoder
     {
         #region Constants
         /// <summary>
@@ -111,28 +110,20 @@ namespace ImageProcessor.Imaging.Formats
 
         #region Fields
         /// <summary>
+        /// The converter for creating the output image from a byte array.
+        /// </summary>
+        private static readonly ImageConverter Converter = new ImageConverter();
+
+        /// <summary>
         /// The stream.
         /// </summary>
         // ReSharper disable once FieldCanBeMadeReadOnly.Local
-        private MemoryStream inputStream;
+        private MemoryStream imageStream;
 
         /// <summary>
         /// The height.
         /// </summary>
         private int? height;
-
-        /// <summary>
-        /// A value indicating whether this instance of the given entity has been disposed.
-        /// </summary>
-        /// <value><see langword="true"/> if this instance has been disposed; otherwise, <see langword="false"/>.</value>
-        /// <remarks>
-        /// If the entity is disposed, it must not be disposed a second
-        /// time. The isDisposed field is set the first time the entity
-        /// is disposed. If the isDisposed field is true, then the Dispose()
-        /// method will not dispose again. This help not to prolong the entity's
-        /// life in the Garbage Collector.
-        /// </remarks>
-        private bool isDisposed;
 
         /// <summary>
         /// The is first image.
@@ -148,15 +139,17 @@ namespace ImageProcessor.Imaging.Formats
         /// The width.
         /// </summary>
         private int? width;
+
+        /// <summary>
+        /// Whether the gif has has the last terminated byte written.
+        /// </summary>
+        private bool terminated;
         #endregion
 
         #region Constructors
         /// <summary>
         /// Initializes a new instance of the <see cref="GifEncoder"/> class.
         /// </summary>
-        /// <param name="stream">
-        /// The stream that will be written to.
-        /// </param>
         /// <param name="width">
         /// Sets the width for this gif or null to use the first frame's width.
         /// </param>
@@ -166,32 +159,19 @@ namespace ImageProcessor.Imaging.Formats
         /// <param name="repeatCount">
         /// The number of times to repeat the animation.
         /// </param>
-        public GifEncoder(MemoryStream stream, int? width = null, int? height = null, int? repeatCount = null)
+        public GifEncoder(int? width = null, int? height = null, int? repeatCount = null)
         {
-            this.inputStream = stream;
+            this.imageStream = new MemoryStream();
             this.width = width;
             this.height = height;
             this.repeatCount = repeatCount;
         }
+        #endregion
 
         /// <summary>
-        /// Finalizes an instance of the <see cref="GifEncoder"/> class. 
+        /// Gets or sets the image bytes.
         /// </summary>
-        /// <remarks>
-        /// Use C# destructor syntax for finalization code.
-        /// This destructor will run only if the Dispose method 
-        /// does not get called.
-        /// It gives your base class the opportunity to finalize.
-        /// Do not provide destructors in types derived from this class.
-        /// </remarks>
-        ~GifEncoder()
-        {
-            // Do not re-create Dispose clean-up code here.
-            // Calling Dispose(false) is optimal in terms of
-            // readability and maintainability.
-            this.Dispose(false);
-        }
-        #endregion
+        public byte[] ImageBytes { get; set; }
 
         #region Public Methods and Operators
         /// <summary>
@@ -211,7 +191,7 @@ namespace ImageProcessor.Imaging.Formats
                     this.WriteHeaderBlock(gifStream, frame.Image.Width, frame.Image.Height);
                 }
 
-                this.WriteGraphicControlBlock(gifStream, frame.Delay);
+                this.WriteGraphicControlBlock(gifStream, Convert.ToInt32(frame.Delay.TotalMilliseconds / 10F));
                 this.WriteImageBlock(gifStream, !this.isFirstImage, frame.X, frame.Y, frame.Image.Width, frame.Image.Height);
             }
 
@@ -219,53 +199,55 @@ namespace ImageProcessor.Imaging.Formats
         }
 
         /// <summary>
-        /// Disposes the object and frees resources for the Garbage Collector.
+        /// Saves the completed gif to an <see cref="Image"/>
         /// </summary>
-        public void Dispose()
+        /// <returns>The completed animated gif.</returns>
+        public Image Save()
         {
-            this.Dispose(true);
+            if (!this.terminated)
+            {
+                // Complete File
+                this.WriteByte(FileTrailer);
+                this.terminated = true;
+            }
 
-            // This object will be cleaned up by the Dispose method.
-            // Therefore, you should call GC.SupressFinalize to
-            // take this object off the finalization queue 
-            // and prevent finalization code for this object
-            // from executing a second time.
-            GC.SuppressFinalize(this);
+            // Push the data
+            this.imageStream.Flush();
+            this.imageStream.Position = 0;
+            this.ImageBytes = this.imageStream.ToArray();
+            this.imageStream.Dispose();
+            return (Image)Converter.ConvertFrom(this.ImageBytes);
+        }
+
+        /// <summary>
+        /// Saves the completed gif to an <see cref="Stream"/>
+        /// </summary>
+        /// <param name="stream">The stream.</param>
+        public void Save(Stream stream)
+        {
+            if (!this.terminated)
+            {
+                // Complete File
+                this.WriteByte(FileTrailer);
+                this.terminated = true;
+            }
+
+            if (stream.CanSeek)
+            {
+                stream.Position = 0;
+            }
+
+            // Push the data
+            this.imageStream.Flush();
+            this.imageStream.Position = 0;
+
+            this.imageStream.CopyTo(stream);
+
+            this.imageStream.Position = 0;
         }
         #endregion
 
         #region Methods
-        /// <summary>
-        /// Disposes the object and frees resources for the Garbage Collector.
-        /// </summary>
-        /// <param name="disposing">
-        /// If true, the object gets disposed.
-        /// </param>
-        protected virtual void Dispose(bool disposing)
-        {
-            if (this.isDisposed)
-            {
-                return;
-            }
-
-            if (disposing)
-            {
-                // Complete Application Block
-                this.WriteByte(0);
-
-                // Complete File
-                this.WriteByte(FileTrailer);
-
-                // Push the data
-                this.inputStream.Flush();
-            }
-
-            // Call the appropriate methods to clean up
-            // unmanaged resources here.
-            // Note disposing is done.
-            this.isDisposed = true;
-        }
-
         /// <summary>
         /// Writes the header block of the animated gif to the stream.
         /// </summary>
@@ -280,8 +262,6 @@ namespace ImageProcessor.Imaging.Formats
         /// </param>
         private void WriteHeaderBlock(Stream sourceGif, int w, int h)
         {
-            int count = this.repeatCount.GetValueOrDefault(0);
-
             // File Header signature and version.
             this.WriteString(FileType);
             this.WriteString(FileVersion);
@@ -294,33 +274,41 @@ namespace ImageProcessor.Imaging.Formats
             sourceGif.Position = SourceGlobalColorInfoPosition;
             this.WriteByte(sourceGif.ReadByte());
 
-            this.WriteByte(0); // Background Color Index
+            this.WriteByte(255); // Background Color Index
             this.WriteByte(0); // Pixel aspect ratio
             this.WriteColorTable(sourceGif);
 
             // Application Extension Header
-            this.WriteShort(ApplicationExtensionBlockIdentifier);
-            this.WriteByte(ApplicationBlockSize);
-            this.WriteString(ApplicationIdentification);
-            this.WriteByte(3); // Application block length
-            this.WriteByte(1);
-            this.WriteShort(count); // Repeat count for images.
-            this.WriteByte(0); // Terminator
+            int count = this.repeatCount.GetValueOrDefault(0);
+            if (count != 1)
+            {
+                // 0 means loop indefinitely. count is set as play n + 1 times.
+                count = Math.Max(0, count - 1);
+                this.WriteShort(ApplicationExtensionBlockIdentifier);
+                this.WriteByte(ApplicationBlockSize);
+
+                this.WriteString(ApplicationIdentification);
+                this.WriteByte(3); // Application block length
+                this.WriteByte(1);
+                this.WriteShort(count); // Repeat count for images.
+
+                this.WriteByte(0); // Terminator
+            }
         }
 
         /// <summary>
-        /// The write byte.
+        /// Writes the given integer as a byte to the stream.
         /// </summary>
         /// <param name="value">
         /// The value.
         /// </param>
         private void WriteByte(int value)
         {
-            this.inputStream.WriteByte(Convert.ToByte(value));
+            this.imageStream.WriteByte(Convert.ToByte(value));
         }
 
         /// <summary>
-        /// The write color table.
+        /// Writes the color table.
         /// </summary>
         /// <param name="sourceGif">
         /// The source gif.
@@ -330,18 +318,14 @@ namespace ImageProcessor.Imaging.Formats
             sourceGif.Position = SourceColorBlockPosition; // Locating the image color table
             byte[] colorTable = new byte[SourceColorBlockLength];
             sourceGif.Read(colorTable, 0, colorTable.Length);
-            this.inputStream.Write(colorTable, 0, colorTable.Length);
+            this.imageStream.Write(colorTable, 0, colorTable.Length);
         }
 
         /// <summary>
-        /// The write graphic control block.
+        /// Writes graphic control block.
         /// </summary>
-        /// <param name="sourceGif">
-        /// The source gif.
-        /// </param>
-        /// <param name="frameDelay">
-        /// The frame delay.
-        /// </param>
+        /// <param name="sourceGif">The source gif.</param>
+        /// <param name="frameDelay">The frame delay.</param>
         private void WriteGraphicControlBlock(Stream sourceGif, int frameDelay)
         {
             sourceGif.Position = SourceGraphicControlExtensionPosition; // Locating the source GCE
@@ -351,29 +335,19 @@ namespace ImageProcessor.Imaging.Formats
             this.WriteShort(GraphicControlExtensionBlockIdentifier); // Identifier
             this.WriteByte(GraphicControlExtensionBlockSize); // Block Size
             this.WriteByte(blockhead[3] & 0xf7 | 0x08); // Setting disposal flag
-            this.WriteShort(Convert.ToInt32(frameDelay / 10.0f)); // Setting frame delay
-            this.WriteByte(blockhead[6]); // Transparent color index
+            this.WriteShort(frameDelay); // Setting frame delay
+            this.WriteByte(255); // Transparent color index
             this.WriteByte(0); // Terminator
         }
 
         /// <summary>
-        /// The write image block.
+        /// Writes image block data.
         /// </summary>
-        /// <param name="sourceGif">
-        /// The source gif.
-        /// </param>
-        /// <param name="includeColorTable">
-        /// The include color table.
-        /// </param>
-        /// <param name="x">
-        /// The x position to write the image block.
-        /// </param>
-        /// <param name="y">
-        /// The y position to write the image block.
-        /// </param>
-        /// <param name="h">
-        /// The height of the image block.
-        /// </param>
+        /// <param name="sourceGif">The source gif.</param>
+        /// <param name="includeColorTable">The include color table.</param>
+        /// <param name="x">The x position to write the image block.</param>
+        /// <param name="y">The y position to write the image block.</param>
+        /// <param name="h">The height of the image block.</param>
         /// <param name="w">
         /// The width of the image block.
         /// </param>
@@ -412,12 +386,12 @@ namespace ImageProcessor.Imaging.Formats
                 byte[] imgData = new byte[dataLength];
                 sourceGif.Read(imgData, 0, dataLength);
 
-                this.inputStream.WriteByte(Convert.ToByte(dataLength));
-                this.inputStream.Write(imgData, 0, dataLength);
+                this.imageStream.WriteByte(Convert.ToByte(dataLength));
+                this.imageStream.Write(imgData, 0, dataLength);
                 dataLength = sourceGif.ReadByte();
             }
 
-            this.inputStream.WriteByte(0); // Terminator
+            this.imageStream.WriteByte(0); // Terminator
         }
 
         /// <summary>
@@ -429,8 +403,8 @@ namespace ImageProcessor.Imaging.Formats
         private void WriteShort(int value)
         {
             // Leave only one significant byte.
-            this.inputStream.WriteByte(Convert.ToByte(value & 0xff));
-            this.inputStream.WriteByte(Convert.ToByte((value >> 8) & 0xff));
+            this.imageStream.WriteByte(Convert.ToByte(value & 0xff));
+            this.imageStream.WriteByte(Convert.ToByte((value >> 8) & 0xff));
         }
 
         /// <summary>
@@ -441,7 +415,7 @@ namespace ImageProcessor.Imaging.Formats
         /// </param>
         private void WriteString(string value)
         {
-            this.inputStream.Write(value.ToArray().Select(c => (byte)c).ToArray(), 0, value.Length);
+            this.imageStream.Write(value.ToArray().Select(c => (byte)c).ToArray(), 0, value.Length);
         }
         #endregion
     }

@@ -1,46 +1,36 @@
 ﻿// --------------------------------------------------------------------------------------------------------------------
-// <copyright file="ImageProcessorConfiguration.cs" company="James South">
-//   Copyright (c) James South.
+// <copyright file="ImageProcessorConfiguration.cs" company="James Jackson-South">
+//   Copyright (c) James Jackson-South.
 //   Licensed under the Apache License, Version 2.0.
 // </copyright>
 // <summary>
 //   Encapsulates methods to allow the retrieval of ImageProcessor settings.
-//   <see href="http://csharpindepth.com/Articles/General/Singleton.aspx" />
 // </summary>
 // --------------------------------------------------------------------------------------------------------------------
+
 namespace ImageProcessor.Web.Configuration
 {
     using System;
     using System.Collections.Concurrent;
     using System.Collections.Generic;
     using System.Linq;
-    using System.Reflection;
-    using System.Web.Compilation;
 
-    using ImageProcessor.Common.Extensions;
-    using ImageProcessor.Processors;
+    using ImageProcessor.Configuration;
     using ImageProcessor.Web.Processors;
+    using ImageProcessor.Web.Services;
 
     /// <summary>
     /// Encapsulates methods to allow the retrieval of ImageProcessor settings.
-    /// <see href="http://csharpindepth.com/Articles/General/Singleton.aspx"/>
     /// </summary>
     public sealed class ImageProcessorConfiguration
     {
         #region Fields
         /// <summary>
-        /// A new instance Initializes a new instance of the <see cref="T:ImageProcessor.Web.Config.ImageProcessorConfig"/> class.
+        /// A new instance of the <see cref="T:ImageProcessor.Web.Config.ImageProcessorConfig"/> class.
         /// with lazy initialization.
         /// </summary>
         private static readonly Lazy<ImageProcessorConfiguration> Lazy =
                         new Lazy<ImageProcessorConfiguration>(() => new ImageProcessorConfiguration());
-
-        /// <summary>
-        /// A collection of the <see cref="T:ImageProcessor.Web.Config.ImageProcessingSection.SettingElementCollection"/> elements 
-        /// for available plugins.
-        /// </summary>
-        private static readonly ConcurrentDictionary<string, Dictionary<string, string>> PluginSettings =
-            new ConcurrentDictionary<string, Dictionary<string, string>>();
 
         /// <summary>
         /// A collection of the processing presets defined in the configuration. 
@@ -65,13 +55,14 @@ namespace ImageProcessor.Web.Configuration
         #endregion
 
         #region Constructors
-
         /// <summary>
         /// Prevents a default instance of the <see cref="ImageProcessorConfiguration"/> class from being created.
         /// </summary>
         private ImageProcessorConfiguration()
         {
             this.LoadGraphicsProcessors();
+            this.LoadImageServices();
+            this.LoadImageCache();
         }
         #endregion
 
@@ -79,122 +70,75 @@ namespace ImageProcessor.Web.Configuration
         /// <summary>
         /// Gets the current instance of the <see cref="ImageProcessorConfiguration"/> class.
         /// </summary>
-        public static ImageProcessorConfiguration Instance
-        {
-            get
-            {
-                return Lazy.Value;
-            }
-        }
+        public static ImageProcessorConfiguration Instance => Lazy.Value;
 
         /// <summary>
-        /// Gets the list of available GraphicsProcessors.
+        /// Gets the collection of available procesors to run.
         /// </summary>
-        public IList<IWebGraphicsProcessor> GraphicsProcessors { get; private set; }
+        public ConcurrentDictionary<Type, Dictionary<string, string>> AvailableWebGraphicsProcessors { get; } = new ConcurrentDictionary<Type, Dictionary<string, string>>();
+
+        /// <summary>
+        /// Gets the list of available ImageServices.
+        /// </summary>
+        public IList<IImageService> ImageServices { get; private set; }
+
+        /// <summary>
+        /// Gets the current image cache.
+        /// </summary>
+        public Type ImageCache { get; private set; }
+
+        /// <summary>
+        /// Gets the image cache max days.
+        /// </summary>
+        public int ImageCacheMaxDays { get; private set; }
+
+        /// <summary>
+        /// Gets the value indicating if the disk cache will apply file change monitors that can be used to invalidate the cache
+        /// </summary>
+        public bool UseFileChangeMonitors { get; private set; }
+
+        /// <summary>
+        /// Gets the browser cache max days.
+        /// </summary>
+        public int BrowserCacheMaxDays { get; private set; }
+
+        /// <summary>
+        /// Gets or sets the maximum number folder levels to nest the cached images.
+        /// </summary>
+        public int FolderDepth { get; set; }
+
+        /// <summary>
+        /// Gets or sets a value indicating whether to periodically trim the cache.
+        /// </summary>
+        public bool TrimCache { get; set; }
+
+        /// <summary>
+        /// Gets the image cache settings.
+        /// </summary>
+        public Dictionary<string, string> ImageCacheSettings { get; private set; }
 
         /// <summary>
         /// Gets a value indicating whether to preserve exif meta data.
         /// </summary>
-        public bool PreserveExifMetaData
-        {
-            get
-            {
-                return GetImageProcessingSection().PreserveExifMetaData;
-            }
-        }
-
-        #region Caching
-        /// <summary>
-        /// Gets the maximum number of days to store images in the cache.
-        /// </summary>
-        public int MaxCacheDays
-        {
-            get
-            {
-                return GetImageCacheSection().MaxDays;
-            }
-        }
+        public bool PreserveExifMetaData => GetImageProcessingSection().PreserveExifMetaData;
 
         /// <summary>
-        /// Gets or the virtual path of the cache folder.
+        /// Gets a value indicating whether to allow known cachebusters.
         /// </summary>
-        /// <value>The virtual path of the cache folder.</value>
-        public string VirtualCachePath
-        {
-            get
-            {
-                return GetImageCacheSection().VirtualPath;
-            }
-        }
-        #endregion
-
-        #region Security
-        /// <summary>
-        /// Gets a list of white listed url[s] that images can be downloaded from.
-        /// </summary>
-        public Uri[] RemoteFileWhiteList
-        {
-            get
-            {
-                return GetImageSecuritySection().WhiteList.Cast<ImageSecuritySection.SafeUrl>().Select(x => x.Url).ToArray();
-            }
-        }
+        public bool AllowCacheBuster => GetImageProcessingSection().AllowCacheBuster;
 
         /// <summary>
-        /// Gets a list of image extensions for url[s] with no extension.
+        /// Gets a value indicating whether to convert images to a linear color space before
+        /// processing.
         /// </summary>
-        public ImageSecuritySection.SafeUrl[] RemoteFileWhiteListExtensions
-        {
-            get
-            {
-                return GetImageSecuritySection().WhiteList.Cast<ImageSecuritySection.SafeUrl>().ToArray();
-            }
-        }
+        public bool FixGamma => GetImageProcessingSection().FixGamma;
 
         /// <summary>
-        /// Gets a value indicating whether the current application is allowed to download remote files.
+        /// Gets a value indicating whether whether to intercept all image requests including ones
+        /// without querystring parameters.
         /// </summary>
-        public bool AllowRemoteDownloads
-        {
-            get
-            {
-                return GetImageSecuritySection().AllowRemoteDownloads;
-            }
-        }
+        public bool InterceptAllRequests => GetImageProcessingSection().InterceptAllRequests;
 
-        /// <summary>
-        /// Gets the maximum length to wait in milliseconds before throwing an error requesting a remote file.
-        /// </summary>
-        public int Timeout
-        {
-            get
-            {
-                return GetImageSecuritySection().Timeout;
-            }
-        }
-
-        /// <summary>
-        /// Gets the maximum allowable size in bytes of e remote file to process.
-        /// </summary>
-        public int MaxBytes
-        {
-            get
-            {
-                return GetImageSecuritySection().MaxBytes;
-            }
-        }
-
-        /// <summary>
-        /// Gets the remote prefix for external files for the application.
-        /// </summary>
-        public string RemotePrefix
-        {
-            get
-            {
-                return GetImageSecuritySection().RemotePrefix;
-            }
-        }
-        #endregion
         #endregion
 
         #region Methods
@@ -217,45 +161,17 @@ namespace ImageProcessor.Web.Configuration
                        .Presets
                        .Cast<ImageProcessingSection.PresetElement>()
                        .FirstOrDefault(x => x.Name == n);
-                       return presetElement != null ? presetElement.Value : null;
+                       return presetElement?.Value;
                    });
         }
 
         /// <summary>
-        /// Returns the <see cref="T:ImageProcessor.Web.Config.ImageProcessingSection.SettingElementCollection"/> for the given plugin.
+        /// Retrieves the security configuration section from the current application configuration. 
         /// </summary>
-        /// <param name="name">
-        /// The name of the plugin to get the settings for.
-        /// </param>
-        /// <returns>
-        /// The <see cref="T:ImageProcessor.Web.Config.ImageProcessingSection.SettingElementCollection"/> for the given plugin.
-        /// </returns>
-        public Dictionary<string, string> GetPluginSettings(string name)
+        /// <returns>The security configuration section from the current application configuration. </returns>
+        internal ImageSecuritySection GetImageSecuritySection()
         {
-            return PluginSettings.GetOrAdd(
-                name,
-                n =>
-                {
-                    ImageProcessingSection.PluginElement pluginElement = GetImageProcessingSection()
-                        .Plugins
-                        .Cast<ImageProcessingSection.PluginElement>()
-                        .FirstOrDefault(x => x.Name == n);
-
-                    Dictionary<string, string> settings;
-
-                    if (pluginElement != null)
-                    {
-                        settings = pluginElement.Settings
-                            .Cast<ImageProcessingSection.SettingElement>()
-                            .ToDictionary(setting => setting.Key, setting => setting.Value);
-                    }
-                    else
-                    {
-                        settings = new Dictionary<string, string>();
-                    }
-
-                    return settings;
-                });
+            return imageSecuritySection ?? (imageSecuritySection = ImageSecuritySection.GetConfiguration());
         }
 
         /// <summary>
@@ -276,83 +192,251 @@ namespace ImageProcessor.Web.Configuration
             return imageCacheSection ?? (imageCacheSection = ImageCacheSection.GetConfiguration());
         }
 
+        #region GraphicesProcessors
         /// <summary>
-        /// Retrieves the security configuration section from the current application configuration. 
+        /// Creates and returns a new collection of <see cref="IWebGraphicsProcessor"/> 
+        /// <remarks>
+        /// Creating the processors should be fairly cheap and better for performance than
+        /// locking around the procesors on each request. The System.Drawing.Graphics object still does a lock but that 
+        /// isn't used for many procesors.
+        /// </remarks>
         /// </summary>
-        /// <returns>The security configuration section from the current application configuration. </returns>
-        private static ImageSecuritySection GetImageSecuritySection()
+        /// <returns>The <see cref="T:IWebGraphicsProcessor[]"/></returns>
+        public IWebGraphicsProcessor[] CreateWebGraphicsProcessors()
         {
-            return imageSecuritySection ?? (imageSecuritySection = ImageSecuritySection.GetConfiguration());
-        }
+            List<IWebGraphicsProcessor> processors = new List<IWebGraphicsProcessor>();
 
-        /// <summary>
-        /// Gets the list of available GraphicsProcessors.
-        /// </summary>
-        private void LoadGraphicsProcessors()
-        {
-            if (this.GraphicsProcessors == null)
+            foreach (KeyValuePair<Type, Dictionary<string, string>> pair in this.AvailableWebGraphicsProcessors)
             {
-                if (GetImageProcessingSection().Plugins.AutoLoadPlugins)
-                {
-                    Type type = typeof(IWebGraphicsProcessor);
-                    try
-                    {
-                        // Build a list of native IGraphicsProcessor instances.
-                        List<Type> availableTypes = BuildManager.GetReferencedAssemblies()
-                                                                .Cast<Assembly>()
-                                                                .SelectMany(s => s.GetLoadableTypes())
-                                                                .Where(t => type.IsAssignableFrom(t) && t.IsClass && !t.IsAbstract)
-                                                                .ToList();
-
-                        // Create them and add.
-                        this.GraphicsProcessors = availableTypes.Select(x => (Activator.CreateInstance(x) as IWebGraphicsProcessor)).ToList();
-
-                        // Add the available settings.
-                        foreach (IWebGraphicsProcessor webProcessor in this.GraphicsProcessors)
-                        {
-                            webProcessor.Processor.Settings = this.GetPluginSettings(webProcessor.GetType().Name);
-                        }
-                    }
-                    catch (ReflectionTypeLoadException)
-                    {
-                        this.LoadGraphicsProcessorsFromConfiguration();
-                    }
-                }
-                else
-                {
-                    this.LoadGraphicsProcessorsFromConfiguration();
-                }
+                IWebGraphicsProcessor processor = (IWebGraphicsProcessor)Activator.CreateInstance(pair.Key);
+                processor.Processor.Settings = pair.Value;
+                processors.Add(processor);
             }
+            return processors.ToArray();
         }
 
         /// <summary>
         /// Loads graphics processors from configuration.
         /// </summary>
         /// <exception cref="TypeLoadException">
-        /// Thrown when an <see cref="IGraphicsProcessor"/> cannot be loaded.
+        /// Thrown when an <see cref="IWebGraphicsProcessor"/> cannot be loaded.
         /// </exception>
-        private void LoadGraphicsProcessorsFromConfiguration()
+        private void LoadGraphicsProcessors()
         {
-            ImageProcessingSection.PluginElementCollection pluginConfigs = imageProcessingSection.Plugins;
-            this.GraphicsProcessors = new List<IWebGraphicsProcessor>();
+            IEnumerable<ImageProcessingSection.PluginElement> pluginConfigs
+                = GetImageProcessingSection().Plugins
+                                             .Cast<ImageProcessingSection.PluginElement>()
+                                             .Where(p => p.Enabled);
+
             foreach (ImageProcessingSection.PluginElement pluginConfig in pluginConfigs)
             {
                 Type type = Type.GetType(pluginConfig.Type);
 
                 if (type == null)
                 {
-                    throw new TypeLoadException("Couldn't load IWebGraphicsProcessor: " + pluginConfig.Type);
+                    string message = "Couldn't load IWebGraphicsProcessor: " + pluginConfig.Type;
+                    ImageProcessorBootstrapper.Instance.Logger.Log<ImageProcessorConfiguration>(message);
+                    throw new TypeLoadException(message);
                 }
 
-                this.GraphicsProcessors.Add(Activator.CreateInstance(type) as IWebGraphicsProcessor);
+                Dictionary<string, string> settings = this.GetPluginSettings(type.Name);
+
+                // No reason for this to fail.
+                this.AvailableWebGraphicsProcessors.TryAdd(type, settings);
+            }
+        }
+
+        /// <summary>
+        /// Returns the <see cref="T:ImageProcessor.Web.Config.ImageProcessingSection.SettingElementCollection"/> for the given plugin.
+        /// </summary>
+        /// <param name="name">
+        /// The name of the plugin to get the settings for.
+        /// </param>
+        /// <returns>
+        /// The <see cref="T:ImageProcessor.Web.Config.ImageProcessingSection.SettingElementCollection"/> for the given plugin.
+        /// </returns>
+        private Dictionary<string, string> GetPluginSettings(string name)
+        {
+            ImageProcessingSection.PluginElement pluginElement = GetImageProcessingSection()
+                .Plugins
+                .Cast<ImageProcessingSection.PluginElement>()
+                .FirstOrDefault(x => x.Name == name);
+
+            Dictionary<string, string> settings;
+
+            if (pluginElement != null)
+            {
+                settings = pluginElement.Settings
+                    .Cast<SettingElement>()
+                    .ToDictionary(setting => setting.Key, setting => setting.Value);
+            }
+            else
+            {
+                settings = new Dictionary<string, string>();
+            }
+
+            return settings;
+        }
+        #endregion
+
+        #region ImageServices
+        /// <summary>
+        /// Loads image services from configuration.
+        /// </summary>
+        /// <exception cref="TypeLoadException">
+        /// Thrown when an <see cref="IImageService"/> cannot be loaded.
+        /// </exception>
+        private void LoadImageServices()
+        {
+            ImageSecuritySection.ServiceElementCollection services = this.GetImageSecuritySection().ImageServices;
+            this.ImageServices = new List<IImageService>();
+            foreach (ImageSecuritySection.ServiceElement config in services)
+            {
+                Type type = Type.GetType(config.Type);
+
+                if (type == null)
+                {
+                    string message = $"Couldn\'t load IImageService: {config.Type}";
+                    ImageProcessorBootstrapper.Instance.Logger.Log<ImageProcessorConfiguration>(message);
+                    throw new TypeLoadException(message);
+                }
+
+                IImageService imageService = Activator.CreateInstance(type) as IImageService;
+                if (!string.IsNullOrWhiteSpace(config.Prefix))
+                {
+                    if (imageService != null)
+                    {
+                        imageService.Prefix = config.Prefix;
+                    }
+                }
+
+                this.ImageServices.Add(imageService);
             }
 
             // Add the available settings.
-            foreach (IWebGraphicsProcessor webProcessor in this.GraphicsProcessors)
+            foreach (IImageService service in this.ImageServices)
             {
-                webProcessor.Processor.Settings = this.GetPluginSettings(webProcessor.GetType().Name);
+                string name = service.GetType().Name;
+                Dictionary<string, string> settings = this.GetServiceSettings(name);
+                if (settings.Any())
+                {
+                    service.Settings = settings;
+                }
+                else if (service.Settings == null)
+                {
+                    // I've noticed some developers are not initializing 
+                    // the settings in their implentations.
+                    service.Settings = new Dictionary<string, string>();
+                }
+
+                Uri[] whitelist = this.GetServiceWhitelist(name);
+
+                if (whitelist.Any())
+                {
+                    service.WhiteList = this.GetServiceWhitelist(name);
+                }
             }
         }
+
+        /// <summary>
+        /// Returns the <see cref="SettingElementCollection"/> for the given plugin.
+        /// </summary>
+        /// <param name="name">
+        /// The name of the plugin to get the settings for.
+        /// </param>
+        /// <returns>
+        /// The <see cref="SettingElementCollection"/> for the given plugin.
+        /// </returns>
+        private Dictionary<string, string> GetServiceSettings(string name)
+        {
+            ImageSecuritySection.ServiceElement serviceElement = this.GetImageSecuritySection()
+                .ImageServices
+                .Cast<ImageSecuritySection.ServiceElement>()
+                .FirstOrDefault(x => x.Name == name);
+
+            Dictionary<string, string> settings;
+
+            if (serviceElement != null)
+            {
+                settings = serviceElement.Settings
+                    .Cast<SettingElement>()
+                    .ToDictionary(setting => setting.Key, setting => setting.Value);
+            }
+            else
+            {
+                settings = new Dictionary<string, string>();
+            }
+
+            return settings;
+        }
+
+        /// <summary>
+        /// Gets the whitelist of <see cref="System.Uri"/> for the given service.
+        /// </summary>
+        /// <param name="name">
+        /// The name of the service to return the whitelist for.
+        /// </param>
+        /// <returns>
+        /// The <see cref="System.Uri"/> array containing the whitelist.
+        /// </returns>
+        private Uri[] GetServiceWhitelist(string name)
+        {
+            ImageSecuritySection.ServiceElement serviceElement = this.GetImageSecuritySection()
+               .ImageServices
+               .Cast<ImageSecuritySection.ServiceElement>()
+               .FirstOrDefault(x => x.Name == name);
+
+            Uri[] whitelist = { };
+            if (serviceElement != null)
+            {
+                whitelist = serviceElement.WhiteList
+                    .Cast<ImageSecuritySection.SafeUrl>()
+                    .Select(s => s.Url).ToArray();
+            }
+
+            return whitelist;
+        }
+        #endregion
+
+        #region ImageCaches
+        /// <summary>
+        /// Gets the currently assigned <see cref="IImageCache"/>.
+        /// </summary>
+        private void LoadImageCache()
+        {
+            if (this.ImageCache == null)
+            {
+                string currentCache = GetImageCacheSection().CurrentCache;
+                ImageCacheSection.CacheElementCollection caches = imageCacheSection.ImageCaches;
+
+                foreach (ImageCacheSection.CacheElement cache in caches)
+                {
+                    if (cache.Name == currentCache)
+                    {
+                        Type type = Type.GetType(cache.Type);
+
+                        if (type == null)
+                        {
+                            string message = $"Couldn\'t load IImageCache: {cache.Type}";
+                            ImageProcessorBootstrapper.Instance.Logger.Log<ImageProcessorConfiguration>(message);
+                            throw new TypeLoadException(message);
+                        }
+
+                        this.ImageCache = type;
+                        this.ImageCacheMaxDays = cache.MaxDays;
+                        this.UseFileChangeMonitors = cache.UseFileChangeMonitors;
+                        this.BrowserCacheMaxDays = cache.BrowserMaxDays;
+                        this.TrimCache = cache.TrimCache;
+                        this.FolderDepth = cache.FolderDepth;
+                        this.ImageCacheSettings = cache.Settings
+                                                       .Cast<SettingElement>()
+                                                       .ToDictionary(setting => setting.Key, setting => setting.Value);
+                        break;
+                    }
+                }
+            }
+        }
+        #endregion
         #endregion
     }
 }

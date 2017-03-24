@@ -1,6 +1,6 @@
 ﻿// --------------------------------------------------------------------------------------------------------------------
-// <copyright file="Convolution.cs" company="James South">
-//   Copyright (c) James South.
+// <copyright file="Convolution.cs" company="James Jackson-South">
+//   Copyright (c) James Jackson-South.
 //   Licensed under the Apache License, Version 2.0.
 // </copyright>
 // <summary>
@@ -13,12 +13,13 @@ namespace ImageProcessor.Imaging
     using System;
     using System.Drawing;
     using System.Drawing.Imaging;
-    using System.Runtime.InteropServices;
+    using System.Threading.Tasks;
 
     using ImageProcessor.Common.Extensions;
+    using ImageProcessor.Imaging.Helpers;
 
     /// <summary>
-    /// Provides methods for applying blurring and sharpening effects to an image..
+    /// Provides methods for applying blurring and sharpening effects to an image.
     /// </summary>
     public class Convolution
     {
@@ -26,11 +27,6 @@ namespace ImageProcessor.Imaging
         /// The standard deviation 'sigma' value for calculating Gaussian curves.
         /// </summary>
         private readonly double standardDeviation = 1.4;
-
-        /// <summary>
-        /// Whether to use use dynamic divider for edges.
-        /// </summary>
-        private bool useDynamicDividerForEdges = true;
 
         /// <summary>
         /// Initializes a new instance of the <see cref="Convolution"/> class.
@@ -84,18 +80,7 @@ namespace ImageProcessor.Imaging
         /// <para>Default value is set to <see langword="true" />.</para>
         /// </remarks>
         /// </summary>
-        public bool UseDynamicDividerForEdges
-        {
-            get
-            {
-                return this.useDynamicDividerForEdges;
-            }
-
-            set
-            {
-                this.useDynamicDividerForEdges = value;
-            }
-        }
+        public bool UseDynamicDividerForEdges { get; set; } = true;
 
         /// <summary>
         /// Create a 1 dimensional Gaussian kernel using the Gaussian G(x) function
@@ -257,155 +242,283 @@ namespace ImageProcessor.Imaging
         /// <summary>
         /// Processes the given kernel to produce an array of pixels representing a bitmap.
         /// </summary>
-        /// <param name="sourceBitmap">The image to process.</param>
+        /// <param name="source">The image to process.</param>
         /// <param name="kernel">The Gaussian kernel to use when performing the method</param>
+        /// <param name="fixGamma">Whether to process the image using the linear color space.</param>
         /// <returns>A processed bitmap.</returns>
-        public Bitmap ProcessKernel(Bitmap sourceBitmap, double[,] kernel)
+        public Bitmap ProcessKernel(Bitmap source, double[,] kernel, bool fixGamma)
         {
-            int width = sourceBitmap.Width;
-            int height = sourceBitmap.Height;
+            int width = source.Width;
+            int height = source.Height;
+            Bitmap destination = new Bitmap(width, height, PixelFormat.Format32bppPArgb);
+            destination.SetResolution(source.HorizontalResolution, source.VerticalResolution);
 
-            BitmapData sourceData = sourceBitmap.LockBits(
-                new Rectangle(0, 0, width, height),
-                ImageLockMode.ReadOnly,
-                PixelFormat.Format32bppArgb);
+            using (FastBitmap sourceBitmap = new FastBitmap(source))
+            {
+                using (FastBitmap destinationBitmap = new FastBitmap(destination))
+                {
+                    int kernelLength = kernel.GetLength(0);
+                    int radius = kernelLength >> 1;
+                    int kernelSize = kernelLength * kernelLength;
+                    int threshold = this.Threshold;
 
-            int strideWidth = sourceData.Stride;
-            int scanHeight = sourceData.Height;
+                    // For each line
+                    Parallel.For(
+                        0,
+                        height,
+                        y =>
+                        {
+                            // For each pixel
+                            for (int x = 0; x < width; x++)
+                            {
+                                // The number of kernel elements taken into account
+                                int processedKernelSize;
 
-            int bufferSize = strideWidth * scanHeight;
-            byte[] pixelBuffer = new byte[bufferSize];
-            byte[] resultBuffer = new byte[bufferSize];
+                                // Colour sums
+                                double blue;
+                                double alpha;
+                                double divider;
+                                double green;
+                                double red = green = blue = alpha = divider = processedKernelSize = 0;
 
-            Marshal.Copy(sourceData.Scan0, pixelBuffer, 0, pixelBuffer.Length);
-            sourceBitmap.UnlockBits(sourceData);
+                                // For each kernel row
+                                for (int i = 0; i < kernelLength; i++)
+                                {
+                                    int ir = i - radius;
+                                    int offsetY = y + ir;
+
+                                    // Skip the current row
+                                    if (offsetY < 0)
+                                    {
+                                        continue;
+                                    }
+
+                                    // Outwith the current bounds so break.
+                                    if (offsetY >= height)
+                                    {
+                                        break;
+                                    }
+
+                                    // For each kernel column
+                                    for (int j = 0; j < kernelLength; j++)
+                                    {
+                                        int jr = j - radius;
+                                        int offsetX = x + jr;
+
+                                        // Skip the column
+                                        if (offsetX < 0)
+                                        {
+                                            continue;
+                                        }
+
+                                        if (offsetX < width)
+                                        {
+                                            // ReSharper disable once AccessToDisposedClosure
+                                            Color sourceColor = sourceBitmap.GetPixel(offsetX, offsetY);
+
+                                            if (fixGamma)
+                                            {
+                                                sourceColor = PixelOperations.ToLinear(sourceColor);
+                                            }
+
+                                            double k = kernel[i, j];
+                                            divider += k;
+
+                                            red += k * sourceColor.R;
+                                            green += k * sourceColor.G;
+                                            blue += k * sourceColor.B;
+                                            alpha += k * sourceColor.A;
+
+                                            processedKernelSize++;
+                                        }
+                                    }
+                                }
+
+                                // Check to see if all kernel elements were processed
+                                if (processedKernelSize == kernelSize)
+                                {
+                                    // All kernel elements are processed; we are not on the edge.
+                                    divider = this.Divider;
+                                }
+                                else
+                                {
+                                    // We are on an edge; do we need to use dynamic divider or not?
+                                    if (!this.UseDynamicDividerForEdges)
+                                    {
+                                        // Apply the set divider.
+                                        divider = this.Divider;
+                                    }
+                                }
+
+                                // Check and apply the divider
+                                if ((long)divider != 0)
+                                {
+                                    red /= divider;
+                                    green /= divider;
+                                    blue /= divider;
+                                    alpha /= divider;
+                                }
+
+                                // Add any applicable threshold.
+                                red += threshold;
+                                green += threshold;
+                                blue += threshold;
+                                alpha += threshold;
+
+                                Color destinationColor = Color.FromArgb(alpha.ToByte(), red.ToByte(), green.ToByte(), blue.ToByte());
+
+                                if (fixGamma)
+                                {
+                                    destinationColor = PixelOperations.ToSRGB(destinationColor);
+                                }
+
+                                // ReSharper disable once AccessToDisposedClosure
+                                destinationBitmap.SetPixel(x, y, destinationColor);
+                            }
+                        });
+                }
+            }
+
+            source.Dispose();
+            return destination;
+        }
+
+        /// <summary>
+        /// Processes the given kernel to produce an array of pixels representing a bitmap.
+        /// </summary>
+        /// <param name="source">The image to process.</param>
+        /// <param name="kernel">The Gaussian kernel to use when performing the method</param>
+        /// <param name="fixGamma">Whether to process the image using the linear color space.</param>
+        /// <returns>A processed bitmap.</returns>
+        public Color[,] ProcessKernel(Color[,] source, double[,] kernel, bool fixGamma)
+        {
+            int width = source.GetLength(0);
+            int height = source.GetLength(1);
 
             int kernelLength = kernel.GetLength(0);
             int radius = kernelLength >> 1;
             int kernelSize = kernelLength * kernelLength;
+            int threshold = this.Threshold;
+
+            Color[,] destination = new Color[width, height];
 
             // For each line
-            for (int y = 0; y < height; y++)
-            {
-                // For each pixel
-                for (int x = 0; x < width; x++)
+            Parallel.For(
+                0,
+                height,
+                y =>
                 {
-                    // The number of kernel elements taken into account
-                    int processedKernelSize;
-
-                    // Colour sums
-                    double blue;
-                    double alpha;
-                    double divider;
-                    double green;
-                    double red = green = blue = alpha = divider = processedKernelSize = 0;
-
-                    // The location of the pixel bytes.
-                    int byteOffset = (y * strideWidth) + (x * 4);
-
-                    // For each kernel row
-                    for (int i = 0; i < kernelLength; i++)
+                    // For each pixel
+                    for (int x = 0; x < width; x++)
                     {
-                        int ir = i - radius;
-                        int offsetY = y + ir;
+                        // The number of kernel elements taken into account
+                        int processedKernelSize;
 
-                        // Skip the current row
-                        if (offsetY < 0)
+                        // Colour sums
+                        double blue;
+                        double alpha;
+                        double divider;
+                        double green;
+                        double red = green = blue = alpha = divider = processedKernelSize = 0;
+
+                        // For each kernel row
+                        for (int i = 0; i < kernelLength; i++)
                         {
-                            continue;
-                        }
+                            int ir = i - radius;
+                            int offsetY = y + ir;
 
-                        // Outwith the current bounds so break.
-                        if (offsetY >= height)
-                        {
-                            break;
-                        }
-
-                        // For each kernel column
-                        for (int j = 0; j < kernelLength; j++)
-                        {
-                            int jr = j - radius;
-                            int offsetX = x + jr;
-
-                            // Skip the column
-                            if (offsetX < 0)
+                            // Skip the current row
+                            if (offsetY < 0)
                             {
                                 continue;
                             }
 
-                            if (offsetX < width)
+                            // Outwith the current bounds so break.
+                            if (offsetY >= height)
                             {
-                                int calcOffset = (offsetX * 4) + (offsetY * sourceData.Stride);
-                                byte sourceBlue = pixelBuffer[calcOffset];
-                                byte sourceGreen = pixelBuffer[calcOffset + 1];
-                                byte sourceRed = pixelBuffer[calcOffset + 2];
-                                byte sourceAlpha = pixelBuffer[calcOffset + 3];
+                                break;
+                            }
 
-                                double k = kernel[i, j];
-                                divider += k;
+                            // For each kernel column
+                            for (int j = 0; j < kernelLength; j++)
+                            {
+                                int jr = j - radius;
+                                int offsetX = x + jr;
 
-                                red += k * sourceRed;
-                                green += k * sourceGreen;
-                                blue += k * sourceBlue;
-                                alpha += k * sourceAlpha;
+                                // Skip the column
+                                if (offsetX < 0)
+                                {
+                                    continue;
+                                }
 
-                                processedKernelSize++;
+                                if (offsetX < width)
+                                {
+                                    // ReSharper disable once AccessToDisposedClosure
+                                    Color sourceColor = source[offsetX, offsetY];
+
+                                    if (fixGamma)
+                                    {
+                                        sourceColor = PixelOperations.ToLinear(sourceColor);
+                                    }
+
+                                    double k = kernel[i, j];
+                                    divider += k;
+
+                                    red += k * sourceColor.R;
+                                    green += k * sourceColor.G;
+                                    blue += k * sourceColor.B;
+                                    alpha += k * sourceColor.A;
+
+                                    processedKernelSize++;
+                                }
                             }
                         }
-                    }
 
-                    // Check to see if all kernel elements were processed
-                    if (processedKernelSize == kernelSize)
-                    {
-                        // All kernel elements are processed; we are not on the edge.
-                        divider = this.Divider;
-                    }
-                    else
-                    {
-                        // We are on an edge; do we need to use dynamic divider or not?
-                        if (!this.UseDynamicDividerForEdges)
+                        // Check to see if all kernel elements were processed
+                        if (processedKernelSize == kernelSize)
                         {
-                            // Apply the set divider.
+                            // All kernel elements are processed; we are not on the edge.
                             divider = this.Divider;
                         }
+                        else
+                        {
+                            // We are on an edge; do we need to use dynamic divider or not?
+                            if (!this.UseDynamicDividerForEdges)
+                            {
+                                // Apply the set divider.
+                                divider = this.Divider;
+                            }
+                        }
+
+                        // Check and apply the divider
+                        if ((long)divider != 0)
+                        {
+                            red /= divider;
+                            green /= divider;
+                            blue /= divider;
+                            alpha /= divider;
+                        }
+
+                        // Add any applicable threshold.
+                        red += threshold;
+                        green += threshold;
+                        blue += threshold;
+                        alpha += threshold;
+
+                        Color destinationColor = Color.FromArgb(alpha.ToByte(), red.ToByte(), green.ToByte(), blue.ToByte());
+
+                        if (fixGamma)
+                        {
+                            destinationColor = PixelOperations.ToSRGB(destinationColor);
+                        }
+
+                        destination[x, y] = destinationColor;
                     }
+                });
 
-                    // Check and apply the divider
-                    if ((long)divider != 0)
-                    {
-                        red /= divider;
-                        green /= divider;
-                        blue /= divider;
-                        alpha /= divider;
-                    }
-
-                    // Add any applicable threshold.
-                    red += this.Threshold;
-                    green += this.Threshold;
-                    blue += this.Threshold;
-                    alpha += this.Threshold;
-
-                    resultBuffer[byteOffset] = blue.ToByte(); 
-                    resultBuffer[byteOffset + 1] = green.ToByte(); 
-                    resultBuffer[byteOffset + 2] = red.ToByte(); 
-                    resultBuffer[byteOffset + 3] = alpha.ToByte(); 
-                }
-            }
-
-            Bitmap resultBitmap = new Bitmap(width, height);
-
-            BitmapData resultData = resultBitmap.LockBits(
-                                                new Rectangle(0, 0, width, height),
-                                                ImageLockMode.WriteOnly,
-                                                PixelFormat.Format32bppArgb);
-
-            Marshal.Copy(resultBuffer, 0, resultData.Scan0, resultBuffer.Length);
-            resultBitmap.UnlockBits(resultData);
-
-            return resultBitmap;
+            return destination;
         }
 
-        #region Private
         /// <summary>
         /// Implementation of 1D Gaussian G(x) function
         /// </summary>
@@ -444,6 +557,5 @@ namespace ImageProcessor.Imaging
 
             return left * right;
         }
-        #endregion
     }
 }

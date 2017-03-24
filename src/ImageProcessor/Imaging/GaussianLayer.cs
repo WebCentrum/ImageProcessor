@@ -1,6 +1,6 @@
 ﻿// --------------------------------------------------------------------------------------------------------------------
-// <copyright file="GaussianLayer.cs" company="James South">
-//   Copyright (c) James South.
+// <copyright file="GaussianLayer.cs" company="James Jackson-South">
+//   Copyright (c) James Jackson-South.
 //   Licensed under the Apache License, Version 2.0.
 // </copyright>
 // <summary>
@@ -166,14 +166,20 @@ namespace ImageProcessor.Imaging
         }
 
         /// <summary>
-        /// Returns a hash code value that represents this object.
+        /// Serves as a hash function for a particular type. 
         /// </summary>
         /// <returns>
-        /// A hash code that represents this object.
+        /// A hash code for the current <see cref="T:System.Object"/>.
         /// </returns>
         public override int GetHashCode()
         {
-            return this.Size.GetHashCode() + this.Sigma.GetHashCode() + this.Threshold.GetHashCode();
+            unchecked
+            {
+                int hashCode = this.Size;
+                hashCode = (hashCode * 397) ^ this.Size.GetHashCode();
+                hashCode = (hashCode * 397) ^ this.Threshold;
+                return hashCode;
+            }
         }
     }
 }

@@ -1,6 +1,6 @@
 ﻿// --------------------------------------------------------------------------------------------------------------------
-// <copyright file="GifFrame.cs" company="James South">
-//   Copyright (c) James South.
+// <copyright file="GifFrame.cs" company="James Jackson-South">
+//   Copyright (c) James Jackson-South.
 //   Licensed under the Apache License, Version 2.0.
 // </copyright>
 // <summary>
@@ -10,6 +10,7 @@
 
 namespace ImageProcessor.Imaging.Formats
 {
+    using System;
     using System.Drawing;
 
     /// <summary>
@@ -25,7 +26,7 @@ namespace ImageProcessor.Imaging.Formats
         /// <summary>
         /// Gets or sets the delay in milliseconds.
         /// </summary>
-        public int Delay { get; set; }
+        public TimeSpan Delay { get; set; }
 
         /// <summary>
         /// Gets or sets the x position of the frame.

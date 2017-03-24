@@ -1,6 +1,6 @@
 ﻿// --------------------------------------------------------------------------------------------------------------------
-// <copyright file="Tint.cs" company="James South">
-//   Copyright (c) James South.
+// <copyright file="Tint.cs" company="James Jackson-South">
+//   Copyright (c) James Jackson-South.
 //   Licensed under the Apache License, Version 2.0.
 // </copyright>
 // <summary>
@@ -13,10 +13,10 @@ namespace ImageProcessor.Processors
     using System;
     using System.Collections.Generic;
     using System.Drawing;
-    using System.Drawing.Drawing2D;
     using System.Drawing.Imaging;
 
     using ImageProcessor.Common.Exceptions;
+    using ImageProcessor.Imaging.Helpers;
 
     /// <summary>
     /// Tints an image with the given color.
@@ -70,12 +70,11 @@ namespace ImageProcessor.Processors
 
                 ColorMatrix colorMatrix = new ColorMatrix(colorMatrixElements);
                 newImage = new Bitmap(image.Width, image.Height, PixelFormat.Format32bppPArgb);
+                newImage.SetResolution(image.HorizontalResolution, image.VerticalResolution);
 
                 using (Graphics graphics = Graphics.FromImage(newImage))
                 {
-                    graphics.InterpolationMode = InterpolationMode.HighQualityBicubic;
-                    graphics.PixelOffsetMode = PixelOffsetMode.HighQuality;
-                    graphics.CompositingQuality = CompositingQuality.HighQuality;
+                    GraphicsHelper.SetGraphicsOptions(graphics);
 
                     using (ImageAttributes attributes = new ImageAttributes())
                     {
@@ -89,10 +88,7 @@ namespace ImageProcessor.Processors
             }
             catch (Exception ex)
             {
-                if (newImage != null)
-                {
-                    newImage.Dispose();
-                }
+                newImage?.Dispose();
 
                 throw new ImageProcessingException("Error processing image with " + this.GetType().Name, ex);
             }

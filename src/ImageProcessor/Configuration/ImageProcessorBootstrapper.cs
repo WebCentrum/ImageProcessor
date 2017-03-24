@@ -1,28 +1,26 @@
 ﻿// --------------------------------------------------------------------------------------------------------------------
-// <copyright file="ImageProcessorBootstrapper.cs" company="James South">
-//   Copyright (c) James South.
+// <copyright file="ImageProcessorBootstrapper.cs" company="James Jackson-South">
+//   Copyright (c) James Jackson-South.
 //   Licensed under the Apache License, Version 2.0.
 // </copyright>
 // <summary>
-//   The ImageProcessor bootstrapper.
+//   The ImageProcessor bootstrapper containing initialization code for extending ImageProcessor.
 // </summary>
 // --------------------------------------------------------------------------------------------------------------------
 
 namespace ImageProcessor.Configuration
 {
     using System;
-    using System.Collections;
     using System.Collections.Generic;
-    using System.Diagnostics;
-    using System.IO;
     using System.Linq;
-    using System.Reflection;
 
+    using ImageProcessor.Common.Exceptions;
     using ImageProcessor.Common.Extensions;
+    using ImageProcessor.Common.Helpers;
     using ImageProcessor.Imaging.Formats;
 
     /// <summary>
-    /// The ImageProcessor bootstrapper.
+    /// The ImageProcessor bootstrapper containing initialization code for extending ImageProcessor.
     /// </summary>
     public class ImageProcessorBootstrapper
     {
@@ -40,23 +38,27 @@ namespace ImageProcessor.Configuration
         {
             this.NativeBinaryFactory = new NativeBinaryFactory();
             this.LoadSupportedImageFormats();
+#if NET45
+            this.LoadLogger();
+#endif
         }
 
         /// <summary>
         /// Gets the current instance of the <see cref="ImageProcessorBootstrapper"/> class.
         /// </summary>
-        public static ImageProcessorBootstrapper Instance
-        {
-            get
-            {
-                return Lazy.Value;
-            }
-        }
+        public static ImageProcessorBootstrapper Instance => Lazy.Value;
 
         /// <summary>
         /// Gets the supported image formats.
         /// </summary>
         public IEnumerable<ISupportedImageFormat> SupportedImageFormats { get; private set; }
+
+#if NET45
+        /// <summary>
+        /// Gets the currently installed logger.
+        /// </summary>
+        public ILogger Logger { get; private set; }
+#endif
 
         /// <summary>
         /// Gets the native binary factory for registering embedded (unmanaged) binaries.
@@ -64,98 +66,86 @@ namespace ImageProcessor.Configuration
         public NativeBinaryFactory NativeBinaryFactory { get; private set; }
 
         /// <summary>
+        /// Adds the given image formats to the supported format list. Useful for when 
+        /// the type finder fails to dynamically add the supported formats.
+        /// </summary>
+        /// <param name="format">
+        /// The <see cref="ISupportedImageFormat"/> instance to add.
+        /// </param>
+        public void AddImageFormats(params ISupportedImageFormat[] format)
+        {
+            ((List<ISupportedImageFormat>)this.SupportedImageFormats).AddRange(format);
+        }
+
+#if NET45
+        /// <summary>
+        /// Allows the setting of the default logger. Useful for when 
+        /// the type finder fails to dynamically add the custom logger implementation.
+        /// </summary>
+        /// <param name="logger"></param>
+        public void SetLogger(ILogger logger)
+        {
+            this.Logger = logger;
+        }
+#endif
+
+        /// <summary>
         /// Creates a list, using reflection, of supported image formats that ImageProcessor can run.
         /// </summary>
         private void LoadSupportedImageFormats()
         {
+            List<ISupportedImageFormat> formats = new List<ISupportedImageFormat>
+            {
+                new BitmapFormat(),
+                new GifFormat(),
+                new JpegFormat(),
+                new PngFormat(),
+                new TiffFormat()
+            };
+
+            Type type = typeof(ISupportedImageFormat);
             if (this.SupportedImageFormats == null)
             {
-                Type type = typeof(ISupportedImageFormat);
+                List<Type> availableTypes =
+                    TypeFinder.GetAssembliesWithKnownExclusions()
+                        .SelectMany(a => a.GetLoadableTypes())
+                        .Where(t => type.IsAssignableFrom(t) && t.IsClass && !t.IsAbstract)
+                        .ToList();
 
-                // Get any referenced but not used assemblies.
-                Assembly executingAssembly = Assembly.GetExecutingAssembly();
-                string targetBasePath = Path.GetDirectoryName(new Uri(executingAssembly.Location).LocalPath);
+                formats.AddRange(availableTypes.Select(f => Activator.CreateInstance(f) as ISupportedImageFormat).ToList());
 
-                // ReSharper disable once AssignNullToNotNullAttribute
-                FileInfo[] files = new DirectoryInfo(targetBasePath).GetFiles("*.dll", SearchOption.AllDirectories);
-
-                HashSet<string> found = new HashSet<string>();
-                foreach (FileInfo fileInfo in files)
-                {
-                    try
-                    {
-                        AssemblyName assemblyName = AssemblyName.GetAssemblyName(fileInfo.FullName);
-
-                        if (!AppDomain.CurrentDomain.GetAssemblies()
-                            .Any(a => AssemblyName.ReferenceMatchesDefinition(assemblyName, a.GetName())))
-                        {
-                            // In a web app, this assembly will automatically be bound from the 
-                            // Asp.Net Temporary folder from where the site actually runs.
-                            Assembly.Load(assemblyName);
-                            this.LoadReferencedAssemblies(found, Assembly.Load(assemblyName));
-                        }
-                    }
-                    catch (Exception ex)
-                    {
-                        // Log the exception for debugging only. There could be any old junk 
-                        // thrown in to the bin folder by someone else.
-                        Debug.WriteLine(ex.Message);
-                    }
-                }
-
-                List<Type> availableTypes = AppDomain.CurrentDomain
-                .GetAssemblies()
-                .SelectMany(a => a.GetLoadableTypes())
-                .Where(t => type.IsAssignableFrom(t) && t.IsClass && !t.IsAbstract)
-                .ToList();
-
-                this.SupportedImageFormats = availableTypes
-                    .Select(f => (Activator.CreateInstance(f) as ISupportedImageFormat)).ToList();
+                this.SupportedImageFormats = formats;
             }
         }
 
+#if NET45
         /// <summary>
-        /// Loads any referenced assemblies into the current application domain.
+        /// Loads the logger.
         /// </summary>
-        /// <param name="found">
-        /// The collection containing the name of already found assemblies.
-        /// </param>
-        /// <param name="assembly">
-        /// The assembly to load from.
-        /// </param>
-        private void LoadReferencedAssemblies(HashSet<string> found, Assembly assembly)
+        private void LoadLogger()
         {
-            // Used to avoid duplicates 
-            ArrayList results = new ArrayList();
-
-            // Resulting info 
-            Stack stack = new Stack();
-
-            // Stack of names
-            // Store root assembly (level 0) directly into results list 
-            stack.Push(assembly.ToString());
-
-            // Do a pre-order, non-recursive traversal 
-            while (stack.Count > 0)
+            Type type = typeof(ILogger);
+            if (this.Logger == null)
             {
-                string info = (string)stack.Pop();
+                List<Type> availableTypes =
+                    TypeFinder.GetAssembliesWithKnownExclusions()
+                        .SelectMany(a => a.GetLoadableTypes())
+                        .Where(t => type.IsAssignableFrom(t) && t.IsClass && !t.IsAbstract)
+                        .ToList();
 
-                // Get next assembly 
-                if (!found.Contains(info))
+                // There's more than one so load the first that is not our default.
+                if (availableTypes.Count > 1)
                 {
-                    found.Add(info);
-                    results.Add(info);
-
-                    // Store it to results ArrayList
-                    Assembly child = Assembly.Load(info);
-                    AssemblyName[] subchild = child.GetReferencedAssemblies();
-
-                    for (int i = subchild.Length - 1; i >= 0; --i)
-                    {
-                        stack.Push(subchild[i].ToString());
-                    }
+                    this.Logger = availableTypes.Where(l => l != typeof(DefaultLogger))
+                                                .Select(f => (Activator.CreateInstance(f) as ILogger))
+                                                .First();
+                }
+                else
+                {
+                    this.Logger = new DefaultLogger();
                 }
             }
         }
+#endif
     }
 }

@@ -1,6 +1,6 @@
 ﻿// --------------------------------------------------------------------------------------------------------------------
-// <copyright file="BackgroundColor.cs" company="James South">
-//   Copyright (c) James South.
+// <copyright file="BackgroundColor.cs" company="James Jackson-South">
+//   Copyright (c) James Jackson-South.
 //   Licensed under the Apache License, Version 2.0.
 // </copyright>
 // <summary>
@@ -13,8 +13,10 @@ namespace ImageProcessor.Processors
     using System;
     using System.Collections.Generic;
     using System.Drawing;
+    using System.Drawing.Imaging;
 
     using ImageProcessor.Common.Exceptions;
+    using ImageProcessor.Imaging.Helpers;
 
     /// <summary>
     /// Changes the background color of an image.
@@ -55,17 +57,23 @@ namespace ImageProcessor.Processors
 
             try
             {
+                int width = image.Width;
+                int height = image.Height;
+
                 Color backgroundColor = this.DynamicParameter;
-                newImage = new Bitmap(image.Width, image.Height);
+                newImage = new Bitmap(width, height, PixelFormat.Format32bppPArgb);
+                newImage.SetResolution(image.HorizontalResolution, image.VerticalResolution);
 
                 // Make a graphics object from the empty bitmap.
                 using (Graphics graphics = Graphics.FromImage(newImage))
                 {
+                    GraphicsHelper.SetGraphicsOptions(graphics, true);
+
                     // Fill the background.
                     graphics.Clear(backgroundColor);
 
                     // Draw passed in image onto graphics object.
-                    graphics.DrawImage(image, 0, 0);
+                    graphics.DrawImage(image, 0, 0, width, height);
                 }
 
                 image.Dispose();
@@ -73,10 +81,7 @@ namespace ImageProcessor.Processors
             }
             catch (Exception ex)
             {
-                if (newImage != null)
-                {
-                    newImage.Dispose();
-                }
+                newImage?.Dispose();
 
                 throw new ImageProcessingException("Error processing image with " + this.GetType().Name, ex);
             }

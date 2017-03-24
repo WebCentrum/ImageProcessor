@@ -1,6 +1,6 @@
 ﻿// --------------------------------------------------------------------------------------------------------------------
-// <copyright file="ImageHelpers.cs" company="James South">
-//   Copyright (c) James South.
+// <copyright file="ImageHelpers.cs" company="James Jackson-South">
+//   Copyright (c) James Jackson-South.
 //   Licensed under the Apache License, Version 2.0.
 // </copyright>
 // <summary>
@@ -11,22 +11,57 @@
 namespace ImageProcessor.Web.Helpers
 {
     using System;
-    using System.Collections.Generic;
     using System.Linq;
     using System.Text;
     using System.Text.RegularExpressions;
     using ImageProcessor.Configuration;
     using ImageProcessor.Imaging.Formats;
+    using ImageProcessor.Web.Configuration;
+    using ImageProcessor.Web.Processors;
 
     /// <summary>
-    /// The image helpers.
+    /// Contains helper method for parsing image formats.
     /// </summary>
-    public static class ImageHelpers
+    public class ImageHelpers
     {
+        /// <summary>
+        /// A new instance of the <see cref="T:ImageProcessor.Web.Config.ImageProcessorConfig"/> class.
+        /// with lazy initialization.
+        /// </summary>
+        private static readonly Lazy<ImageHelpers> Lazy =
+                        new Lazy<ImageHelpers>(() => new ImageHelpers());
+
+        /// <summary>
+        /// The format processor for checking extensions.
+        /// </summary>
+        private readonly Format formatProcessor;
+
+        /// <summary>
+        /// Initializes a new instance of the <see cref="ImageHelpers"/> class.
+        /// </summary>
+        public ImageHelpers()
+        {
+            // First check to see if the format processor is being used and test against that.
+            Type processor =
+                ImageProcessorConfiguration.Instance.AvailableWebGraphicsProcessors
+                .Keys.FirstOrDefault(
+                    p => typeof(Format) == p);
+
+            if (processor != null)
+            {
+                this.formatProcessor = (Format)Activator.CreateInstance(typeof(Format));
+            }
+        }
+
+        /// <summary>
+        /// Gets the current instance of the <see cref="ImageHelpers"/> class.
+        /// </summary>
+        public static ImageHelpers Instance => Lazy.Value;
+
         /// <summary>
         /// The regex pattern.
         /// </summary>
-        private static readonly string ExtensionRegexPattern = BuildExtensionRegexPattern();
+        public static readonly string ExtensionRegexPattern = BuildExtensionRegexPattern();
 
         /// <summary>
         /// The image format regex.
@@ -49,53 +84,87 @@ namespace ImageProcessor.Web.Helpers
         }
 
         /// <summary>
-        /// Returns the correct file extension for the given string input
+        /// Returns the correct file extension for the given string input.
+        /// <remarks>
+        /// Falls back to jpeg if no extension is matched.
+        /// </remarks>
         /// </summary>
-        /// <param name="input">
-        /// The string to parse.
-        /// </param>
+        /// <param name="fullPath">The string to parse.</param>
+        /// <param name="queryString">The querystring containing instructions.</param>
         /// <returns>
         /// The correct file extension for the given string input if it can find one; otherwise an empty string.
         /// </returns>
-        public static string GetExtension(string input)
+        public string GetExtension(string fullPath, string queryString)
         {
-            Match match = FormatRegex.Match(input);
+            Match match = null;
+
+            if (this.formatProcessor != null)
+            {
+                match = this.formatProcessor.RegexPattern.Match(queryString);
+            }
+
+            if (match == null || !match.Success)
+            {
+                // Test against the path minus the querystring so any other
+                // processors don't interere.
+                string trimmed = fullPath;
+                if (!string.IsNullOrEmpty(queryString))
+                {
+                    trimmed = trimmed.Replace(queryString, string.Empty);
+                }
+
+                match = FormatRegex.Match(trimmed);
+            }
 
             if (match.Success)
             {
+                string value = match.Value;
+
+                // Clip if format processor match.
+                if (match.Value.Contains("="))
+                {
+                    value = value.Split('=')[1];
+                }
+
                 // Ah the enigma that is the png file.
-                if (match.Value.ToLowerInvariant().EndsWith("png8"))
+                if (value.ToLowerInvariant().EndsWith("png8"))
                 {
                     return "png";
                 }
 
-                return match.Value;
+                return value;
             }
 
-            return string.Empty;
+            // Fall back to jpg
+            return "jpg";
         }
 
         /// <summary>
-        /// Get the correct mime-type for the given string input.
+        /// Returns the content-type/mime-type for a given image type based on it's file extension
         /// </summary>
-        /// <param name="identifier">
-        /// The identifier.
+        /// <param name="extension">
+        /// Can be prefixed with '.' or not (i.e. ".jpg"  or "jpg")
         /// </param>
-        /// <returns>
-        /// The <see cref="string"/> matching the correct mime-type.
-        /// </returns>
-        public static string GetMimeType(string identifier)
+        /// <returns>The <see cref="string"/></returns>
+        internal string GetContentTypeForExtension(string extension)
         {
-            identifier = GetExtension(identifier).Replace(".", string.Empty);
-            List<ISupportedImageFormat> formats = ImageProcessorBootstrapper.Instance.SupportedImageFormats.ToList();
-            ISupportedImageFormat format = formats.FirstOrDefault(f => f.FileExtensions.Any(e => e.Equals(identifier, StringComparison.InvariantCultureIgnoreCase)));
-
-            if (format != null)
+            if (string.IsNullOrWhiteSpace(extension))
             {
-                return format.MimeType;
+                throw new ArgumentException("Value cannot be null or whitespace.", nameof(extension));
             }
 
-            return string.Empty;
+            extension = extension.TrimStart('.');
+
+            ISupportedImageFormat found = ImageProcessorBootstrapper.Instance.SupportedImageFormats
+                .FirstOrDefault(x => x.FileExtensions.Contains(extension, StringComparer.OrdinalIgnoreCase));
+
+            if (found != null)
+            {
+                return found.MimeType;
+            }
+
+            // default
+            return new JpegFormat().MimeType;
         }
 
         /// <summary>

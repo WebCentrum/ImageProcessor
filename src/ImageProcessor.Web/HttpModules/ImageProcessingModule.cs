@@ -1,6 +1,6 @@
 // --------------------------------------------------------------------------------------------------------------------
-// <copyright file="ImageProcessingModule.cs" company="James South">
-//   Copyright (c) James South.
+// <copyright file="ImageProcessingModule.cs" company="James Jackson-South">
+//   Copyright (c) James Jackson-South.
 //   Licensed under the Apache License, Version 2.0.
 // </copyright>
 // <summary>
@@ -10,33 +10,35 @@
 
 namespace ImageProcessor.Web.HttpModules
 {
-    #region Using
     using System;
     using System.Collections.Generic;
-    using System.Diagnostics.CodeAnalysis;
+    using System.Collections.Specialized;
+    using System.ComponentModel;
     using System.IO;
     using System.Linq;
     using System.Net;
     using System.Reflection;
-    using System.Security;
-    using System.Security.Permissions;
-    using System.Security.Principal;
     using System.Text.RegularExpressions;
     using System.Threading.Tasks;
     using System.Web;
     using System.Web.Hosting;
-    using System.Web.Security;
 
+    using ImageProcessor.Configuration;
+    using ImageProcessor.Imaging;
+    using ImageProcessor.Imaging.Formats;
     using ImageProcessor.Web.Caching;
     using ImageProcessor.Web.Configuration;
     using ImageProcessor.Web.Extensions;
     using ImageProcessor.Web.Helpers;
-    #endregion
+    using ImageProcessor.Web.Processors;
+    using ImageProcessor.Web.Services;
+
+    using Microsoft.IO;
 
     /// <summary>
     /// Processes any image requests within the web application.
     /// </summary>
-    public sealed class ImageProcessingModule : IHttpModule
+    public class ImageProcessingModule : IHttpModule
     {
         #region Fields
         /// <summary>
@@ -45,39 +47,55 @@ namespace ImageProcessor.Web.HttpModules
         private const string CachedResponseTypeKey = "CACHED_IMAGE_RESPONSE_TYPE_054F217C-11CF-49FF-8D2F-698E8E6EB58F";
 
         /// <summary>
-        /// The key for storing the cached path of the current image.
-        /// </summary>
-        private const string CachedPathKey = "CACHED_IMAGE_PATH_TYPE_E0741478-C17B-433D-96A8-6CDA797644E9";
-
-        /// <summary>
         /// The key for storing the file dependency of the current image.
         /// </summary>
         private const string CachedResponseFileDependency = "CACHED_IMAGE_DEPENDENCY_054F217C-11CF-49FF-8D2F-698E8E6EB58F";
 
         /// <summary>
-        /// The regular expression to search strings for.
+        /// The regular expression to search strings for presets with.
         /// </summary>
         private static readonly Regex PresetRegex = new Regex(@"preset=[^&]+", RegexOptions.Compiled);
 
         /// <summary>
-        /// The assembly version.
+        /// The regular expression to search strings for protocols with.
         /// </summary>
-        private static readonly string AssemblyVersion = Assembly.GetExecutingAssembly().GetName().Version.ToString();
+        private static readonly Regex ProtocolRegex = new Regex("http(s)?://", RegexOptions.Compiled);
 
         /// <summary>
-        /// The locker for preventing duplicate requests.
+        /// The base assembly version.
+        /// </summary>
+        private static readonly string AssemblyVersion = typeof(ImageFactory).Assembly.GetName().Version.ToString();
+
+        /// <summary>
+        /// The web assembly version.
+        /// </summary>
+        private static readonly string WebAssemblyVersion = Assembly.GetExecutingAssembly().GetName().Version.ToString();
+
+        /// <summary>
+        /// Ensures duplicate requests are atomic.
         /// </summary>
         private static readonly AsyncDuplicateLock Locker = new AsyncDuplicateLock();
 
         /// <summary>
-        /// The value to prefix any remote image requests with to ensure they get captured.
+        /// Whether to allow known cache busters.
         /// </summary>
-        private static string remotePrefix;
+        private static bool? allowCacheBuster;
 
         /// <summary>
         /// Whether to preserve exif meta data.
         /// </summary>
         private static bool? preserveExifMetaData;
+
+        /// <summary>
+        /// Whether to perform gamma correction when performing processing.
+        /// </summary>
+        private static bool? fixGamma;
+
+        /// <summary>
+        /// Whether to to intercept all image requests including ones
+        /// without querystring parameters.
+        /// </summary>
+        private static bool? interceptAllRequests;
 
         /// <summary>
         /// A value indicating whether this instance of the given entity has been disposed.
@@ -91,6 +109,11 @@ namespace ImageProcessor.Web.HttpModules
         /// life in the Garbage Collector.
         /// </remarks>
         private bool isDisposed;
+
+        /// <summary>
+        /// The image cache.
+        /// </summary>
+        private IImageCache imageCache;
         #endregion
 
         #region Destructors
@@ -114,42 +137,204 @@ namespace ImageProcessor.Web.HttpModules
         #endregion
 
         /// <summary>
+        /// The process querystring event handler. DO NOT USE!
+        /// </summary>
+        /// <param name="sender">The sender.</param>
+        /// <param name="e">The <see cref="ProcessQueryStringEventArgs"/>.
+        /// </param>
+        /// <returns>Returns the processed querystring.</returns>
+        [Obsolete("Use ValidatingRequest instead")]
+        [EditorBrowsable(EditorBrowsableState.Never)]
+        public delegate string ProcessQuerystringEventHandler(object sender, ProcessQueryStringEventArgs e);
+
+        /// <summary>
+        /// Event to use to validate the request or manipulate the request parameters
+        /// </summary>
+        /// <remarks>
+        /// This can be used by developers to cancel the request based on the parameters specified or used to manipulate the parameters
+        /// </remarks>
+        public static event EventHandler<ValidatingRequestEventArgs> ValidatingRequest;
+
+        /// <summary>
         /// The event that is called when a new image is processed.
         /// </summary>
         public static event EventHandler<PostProcessingEventArgs> OnPostProcessing;
 
-        // WEBCENTRUM
-        public static Func<string, bool> FileExists { get; set; }
-        public static Func<string, bool> CachingFilter { get; set; }
+        /// <summary>
+        /// The event that is called when a querystring is processed. DO NOT USE!
+        /// </summary>
+        [Obsolete("Use ValidatingRequest instead")]
+        [EditorBrowsable(EditorBrowsableState.Never)]
+#pragma warning disable 618
+        public static event ProcessQuerystringEventHandler OnProcessQuerystring;
+#pragma warning restore 618
+
+        /// <summary>
+        /// This will make the browser and server keep the output
+        /// in its cache and thereby improve performance.
+        /// </summary>
+        /// <param name="context">
+        /// the <see cref="T:System.Web.HttpContext">HttpContext</see> object that provides
+        /// references to the intrinsic server objects
+        /// </param>
+        /// <param name="responseType">The HTTP MIME type to send.</param>
+        /// <param name="dependencyPaths">The dependency path for the cache dependency.</param>
+        /// <param name="maxDays">The maximum number of days to store the image in the browser cache.</param>
+        /// <param name="statusCode">An optional status code to send to the response.</param>
+        public static void SetHeaders(HttpContext context, string responseType, string[] dependencyPaths, int maxDays, HttpStatusCode? statusCode = null)
+        {
+            HttpResponse response = context.Response;
+
+            if (response.Headers["ImageProcessedBy"] == null)
+            {
+                response.AddHeader("ImageProcessedBy", $"ImageProcessor/{AssemblyVersion} - ImageProcessor.Web/{WebAssemblyVersion}");
+            }
+
+            HttpCachePolicy cache = response.Cache;
+            cache.SetCacheability(HttpCacheability.Public);
+            cache.VaryByHeaders["Accept-Encoding"] = true;
+
+            if (!string.IsNullOrWhiteSpace(responseType))
+            {
+                response.ContentType = responseType;
+            }
+
+            if (dependencyPaths != null)
+            {
+                context.Response.AddFileDependencies(dependencyPaths.ToArray());
+                cache.SetLastModifiedFromFileDependencies();
+            }
+
+            if (statusCode != null)
+            {
+                response.StatusCode = (int)statusCode;
+            }
+
+            cache.SetExpires(DateTime.Now.ToUniversalTime().AddDays(maxDays));
+            cache.SetMaxAge(new TimeSpan(maxDays, 0, 0, 0));
+            cache.SetRevalidation(HttpCacheRevalidation.AllCaches);
+
+            AddCorsRequestHeaders(context);
+        }
+
+        /// <summary>
+        /// This will make the browser and server keep the output in its cache and thereby improve performance.
+        /// </summary>
+        /// <param name="context">
+        /// the <see cref="T:System.Web.HttpContext">HttpContext</see> object that provides
+        /// references to the intrinsic server objects
+        /// </param>
+        /// <param name="maxDays">The maximum number of days to store the image in the browser cache.</param>
+        public static void SetHeaders(HttpContext context, int maxDays)
+        {
+            object responseTypeObject = context.Items[CachedResponseTypeKey];
+            object dependencyFileObject = context.Items[CachedResponseFileDependency];
+
+            string responseType = responseTypeObject as string;
+            string[] dependencyFiles = dependencyFileObject as string[];
+
+            SetHeaders(context, responseType, dependencyFiles, maxDays);
+        }
+
+        /// <summary>
+        /// Adds response headers allowing Cross Origin Requests if the current origin request
+        /// passes sanitizing rules.
+        /// </summary>
+        /// <param name="context">
+        /// the <see cref="T:System.Web.HttpContext">HttpContext</see> object that provides
+        /// references to the intrinsic server objects
+        /// </param>
+        public static void AddCorsRequestHeaders(HttpContext context)
+        {
+            if (!string.IsNullOrEmpty(context.Request.Headers["Origin"]))
+            {
+                // Ensure origin is sanitized.
+                string origin = context.Server.UrlEncode(context.Request.Headers["Origin"]);
+
+                ImageSecuritySection.CORSOriginElement origins =
+                    ImageProcessorConfiguration.Instance.GetImageSecuritySection().CORSOrigin;
+
+                if (origins?.WhiteList == null)
+                {
+                    return;
+                }
+
+                // Check the url is from a whitelisted location.
+                if (origin != null)
+                {
+                    Uri url = new Uri(origin);
+                    string upper = url.Host.ToUpperInvariant();
+
+                    // Check for root or sub domain.
+                    bool validUrl = false;
+                    foreach (Uri uri in origins.WhiteList)
+                    {
+                        if (uri.ToString() == "*")
+                        {
+                            validUrl = true;
+                            break;
+                        }
+
+                        if (!uri.IsAbsoluteUri)
+                        {
+                            Uri rebaseUri = new Uri("http://" + uri.ToString().TrimStart('.', '/'));
+                            validUrl = upper.StartsWith(rebaseUri.Host.ToUpperInvariant()) || upper.EndsWith(rebaseUri.Host.ToUpperInvariant());
+                        }
+                        else
+                        {
+                            validUrl = upper.StartsWith(uri.Host.ToUpperInvariant()) || upper.EndsWith(uri.Host.ToUpperInvariant());
+                        }
+
+                        if (validUrl)
+                        {
+                            break;
+                        }
+                    }
+
+                    if (validUrl)
+                    {
+                        context.Response.AddHeader("Access-Control-Allow-Origin", origin);
+                    }
+                }
+            }
+        }
 
         #region IHttpModule Members
         /// <summary>
         /// Initializes a module and prepares it to handle requests.
         /// </summary>
-        /// <param name="context">
+        /// <param name="application">
         /// An <see cref="T:System.Web.HttpApplication"/> that provides
         /// access to the methods, properties, and events common to all
         /// application objects within an ASP.NET application
         /// </param>
-        public void Init(HttpApplication context)
+        public void Init(HttpApplication application)
         {
-            if (remotePrefix == null)
-            {
-                remotePrefix = ImageProcessorConfiguration.Instance.RemotePrefix;
-            }
-
             if (preserveExifMetaData == null)
             {
                 preserveExifMetaData = ImageProcessorConfiguration.Instance.PreserveExifMetaData;
             }
 
+            if (allowCacheBuster == null)
+            {
+                allowCacheBuster = ImageProcessorConfiguration.Instance.AllowCacheBuster;
+            }
+
+            if (fixGamma == null)
+            {
+                fixGamma = ImageProcessorConfiguration.Instance.FixGamma;
+            }
+
+            if (interceptAllRequests == null)
+            {
+                interceptAllRequests = ImageProcessorConfiguration.Instance.InterceptAllRequests;
+            }
+
             EventHandlerTaskAsyncHelper postAuthorizeHelper = new EventHandlerTaskAsyncHelper(this.PostAuthorizeRequest);
-            context.AddOnPostAuthorizeRequestAsync(postAuthorizeHelper.BeginEventHandler, postAuthorizeHelper.EndEventHandler);
+            application.AddOnPostAuthorizeRequestAsync(postAuthorizeHelper.BeginEventHandler, postAuthorizeHelper.EndEventHandler);
 
-            EventHandlerTaskAsyncHelper postProcessHelper = new EventHandlerTaskAsyncHelper(this.PostProcessImage);
-            context.AddOnPostRequestHandlerExecuteAsync(postProcessHelper.BeginEventHandler, postProcessHelper.EndEventHandler);
-
-            context.PreSendRequestHeaders += this.ContextPreSendRequestHeaders;
+            application.PostReleaseRequestState += this.PostReleaseRequestState;
+            application.EndRequest += this.OnEndRequest;
         }
 
         /// <summary>
@@ -160,7 +345,7 @@ namespace ImageProcessor.Web.HttpModules
             this.Dispose(true);
 
             // This object will be cleaned up by the Dispose method.
-            // Therefore, you should call GC.SupressFinalize to
+            // Therefore, you should call GC.SuppressFinalize to
             // take this object off the finalization queue
             // and prevent finalization code for this object
             // from executing a second time.
@@ -168,9 +353,41 @@ namespace ImageProcessor.Web.HttpModules
         }
 
         /// <summary>
+        /// Occurs when the user for the current request has been authorized.
+        /// </summary>
+        /// <param name="sender">
+        /// The source of the event.
+        /// </param>
+        /// <param name="e">
+        /// An <see cref="T:System.EventArgs">EventArgs</see> that contains the event data.
+        /// </param>
+        /// <returns>
+        /// The <see cref="T:System.Threading.Tasks.Task"/>.
+        /// </returns>
+        protected virtual Task PostAuthorizeRequest(object sender, EventArgs e)
+        {
+            HttpContext context = ((HttpApplication)sender).Context;
+            return this.ProcessImageAsync(context);
+        }
+
+        /// <summary>
+        /// Gets url for the current request.
+        /// </summary>
+        /// <param name="request">The request.</param>
+        /// <returns>
+        /// The <see cref="string"/>.
+        /// </returns>
+        protected virtual string GetRequestUrl(HttpRequest request)
+        {
+            return request.Unvalidated.RawUrl;
+        }
+
+        /// <summary>
         /// Disposes the object and frees resources for the Garbage Collector.
         /// </summary>
-        /// <param name="disposing">If true, the object gets disposed.</param>
+        /// <param name="disposing">
+        /// If true, the object gets disposed.
+        /// </param>
         private void Dispose(bool disposing)
         {
             if (this.isDisposed)
@@ -191,24 +408,6 @@ namespace ImageProcessor.Web.HttpModules
         #endregion
 
         /// <summary>
-        /// Occurs when the user for the current request has been authorized.
-        /// </summary>
-        /// <param name="sender">
-        /// The source of the event.
-        /// </param>
-        /// <param name="e">
-        /// An <see cref="T:System.EventArgs">EventArgs</see> that contains the event data.
-        /// </param>
-        /// <returns>
-        /// The <see cref="T:System.Threading.Tasks.Task"/>.
-        /// </returns>
-        private Task PostAuthorizeRequest(object sender, EventArgs e)
-        {
-            HttpContext context = ((HttpApplication)sender).Context;
-            return this.ProcessImageAsync(context);
-        }
-
-        /// <summary>
         /// Occurs when the ASP.NET event handler finishes execution.
         /// </summary>
         /// <param name="sender">
@@ -217,55 +416,29 @@ namespace ImageProcessor.Web.HttpModules
         /// <param name="e">
         /// An <see cref="T:System.EventArgs">EventArgs</see> that contains the event data.
         /// </param>
-        /// <returns>
-        /// The <see cref="T:System.Threading.Tasks.Task"/>.
-        /// </returns>
-        private Task PostProcessImage(object sender, EventArgs e)
+        private void OnEndRequest(object sender, EventArgs e)
         {
-            HttpContext context = ((HttpApplication)sender).Context;
-            object cachedPathObject = context.Items[CachedPathKey];
-
-            if (cachedPathObject != null)
-            {
-                string cachedPath = cachedPathObject.ToString();
-
-                // Trim the cache.
-                DiskCache.TrimCachedFolders(cachedPath);
-
-                // Fire the post processing event.
-                EventHandler<PostProcessingEventArgs> handler = OnPostProcessing;
-                if (handler != null)
-                {
-                    context.Items[CachedPathKey] = null;
-                    return Task.Run(() => handler(this, new PostProcessingEventArgs { CachedImagePath = cachedPath }));
-                }
-            }
-
-            return Task.FromResult<object>(null);
+            // Reset the cache.
+            this.imageCache = null;
         }
 
         /// <summary>
-        /// Occurs just before ASP.NET send HttpHeaders to the client.
+        /// Occurs when ASP.NET has completed executing all request event handlers and the request
+        /// state data has been stored.
         /// </summary>
-        /// <param name="sender">The source of the event.</param>
-        /// <param name="e">An <see cref="T:System.EventArgs">EventArgs</see> that contains the event data.</param>
-        private void ContextPreSendRequestHeaders(object sender, EventArgs e)
+        /// <param name="sender">
+        /// The source of the event.
+        /// </param>
+        /// <param name="e">
+        /// An <see cref="T:System.EventArgs">EventArgs</see> that contains the event data.
+        /// </param>
+        private void PostReleaseRequestState(object sender, EventArgs e)
         {
             HttpContext context = ((HttpApplication)sender).Context;
-
-            object responseTypeObject = context.Items[CachedResponseTypeKey];
-            object dependencyFileObject = context.Items[CachedResponseFileDependency];
-
-            if (responseTypeObject != null && dependencyFileObject != null)
+            // Set the headers
+            if (this.imageCache != null)
             {
-                string responseType = (string)responseTypeObject;
-                List<string> dependencyFiles = (List<string>)dependencyFileObject;
-
-                // Set the headers
-                this.SetHeaders(context, responseType, dependencyFiles);
-
-                context.Items[CachedResponseTypeKey] = null;
-                context.Items[CachedResponseFileDependency] = null;
+                SetHeaders(context, this.imageCache.BrowserMaxDays);
             }
         }
 
@@ -280,314 +453,391 @@ namespace ImageProcessor.Web.HttpModules
         /// <returns>
         /// The <see cref="T:System.Threading.Tasks.Task"/>.
         /// </returns>
-        [SuppressMessage("StyleCop.CSharp.ReadabilityRules", "SA1122:UseStringEmptyForEmptyStrings", Justification = "Reviewed. Suppression is OK here.")]
         private async Task ProcessImageAsync(HttpContext context)
         {
             HttpRequest request = context.Request;
+            string rawUrl = this.GetRequestUrl(request);
 
-            // Fixes issue 10.
-            bool isRemote = request.Path.EndsWith(remotePrefix, StringComparison.OrdinalIgnoreCase);
-            string requestPath = string.Empty;
-            string queryString = string.Empty;
-            bool validExtensionLessUrl = false;
-            string urlParameters = "";
-            string extensionLessExtension = "";
-
-            if (isRemote)
+            // Should we ignore this request?
+            if (string.IsNullOrWhiteSpace(rawUrl) || rawUrl.ToUpperInvariant().Contains("IPIGNORE=TRUE"))
             {
-                // We need to split the querystring to get the actual values we want.
-                string urlDecode = HttpUtility.UrlDecode(request.QueryString.ToString());
+                return;
+            }
 
-                if (!string.IsNullOrWhiteSpace(urlDecode))
+            // Sometimes the request is url encoded
+            // See https://github.com/JimBobSquarePants/ImageProcessor/issues/478
+            // This causes a bit of a nightmare as the incoming request is corrupted and cannot be used for splitting
+            // out each url part. This becomes a manual job.
+            string url = rawUrl;
+            string applicationPath = request.ApplicationPath;
+
+            IImageService currentService = this.GetImageServiceForRequest(url, applicationPath);
+
+            if (currentService != null)
+            {
+                // Parse url
+                string requestPath, queryString;
+                UrlParser.ParseUrl(url, currentService.Prefix, out requestPath, out queryString);
+
+                // Map the request path if file local.
+                bool isFileLocal = currentService.IsFileLocalService;
+                if (currentService.IsFileLocalService)
                 {
-                    // UrlDecode seems to mess up in some circumstance.
-                    if (urlDecode.IndexOf("://", StringComparison.OrdinalIgnoreCase) == -1)
-                    {
-                        urlDecode = urlDecode.Replace(":/", "://");
-                    }
-
-                    string[] paths = urlDecode.Split('?');
-
-                    requestPath = paths[0];
-
-                    // Handle extension-less urls.
-                    if (paths.Count() > 2)
-                    {
-                        queryString = paths[2];
-                        urlParameters = paths[1];
-                    }
-                    else if (paths.Length > 1)
-                    {
-                        queryString = paths[1];
-                    }
-
-                    validExtensionLessUrl = RemoteFile.RemoteFileWhiteListExtensions.Any(
-                        x => x.ExtensionLess && requestPath.StartsWith(x.Url.AbsoluteUri));
-
-                    if (validExtensionLessUrl)
-                    {
-                        extensionLessExtension = RemoteFile.RemoteFileWhiteListExtensions.First(
-                        x => x.ExtensionLess && requestPath.StartsWith(x.Url.AbsoluteUri)).ImageFormat;
-                    }
+                    requestPath = HostingEnvironment.MapPath(requestPath);
                 }
-            }
-            else
-            {
-                requestPath = HostingEnvironment.MapPath(request.Path);
-                queryString = HttpUtility.UrlDecode(request.QueryString.ToString());
-            }
 
-            // Only process requests that pass our sanitizing filter.
-            if ((ImageHelpers.IsValidImageExtension(requestPath) || validExtensionLessUrl) && !string.IsNullOrWhiteSpace(queryString))
-            {
+                if (string.IsNullOrWhiteSpace(requestPath))
+                {
+                    return;
+                }
+
+                // Parse any protocol values from settings if no protocol is present.
+                if (currentService.Settings.ContainsKey("Protocol") && (ProtocolRegex.Matches(requestPath).Count == 0 || ProtocolRegex.Matches(requestPath)[0].Index > 0))
+                {
+                    // ReSharper disable once PossibleNullReferenceException
+                    requestPath = currentService.Settings["Protocol"] + "://" + requestPath.TrimStart('/');
+                }
+
                 // Replace any presets in the querystring with the actual value.
                 queryString = this.ReplacePresetsInQueryString(queryString);
 
-                string fullPath = string.Format("{0}?{1}", requestPath, queryString);
-                string imageName = Path.GetFileName(requestPath);
+                HttpContextWrapper httpContextBase = new HttpContextWrapper(context);
 
-                if (validExtensionLessUrl && !string.IsNullOrWhiteSpace(extensionLessExtension))
+                // Execute the handler which can change the querystring
+                //  LEGACY:
+#pragma warning disable 618
+                queryString = this.CheckQuerystringHandler(context, queryString, rawUrl);
+#pragma warning restore 618
+
+                // NEW WAY:
+                ValidatingRequestEventArgs validatingArgs = new ValidatingRequestEventArgs(httpContextBase, queryString);
+                this.OnValidatingRequest(validatingArgs);
+
+                // If the validation has failed based on events, return
+                if (validatingArgs.Cancel)
                 {
-                    fullPath = requestPath;
-
-                    if (!string.IsNullOrWhiteSpace(urlParameters))
-                    {
-                        string hashedUrlParameters = urlParameters.ToMD5Fingerprint();
-
-                        // TODO: Add hash for querystring parameters?
-                        imageName += hashedUrlParameters;
-                        fullPath += hashedUrlParameters;
-                    }
-
-                    imageName += "." + extensionLessExtension;
-                    fullPath += extensionLessExtension + "?" + queryString;
+                    ImageProcessorBootstrapper.Instance.Logger.Log<ImageProcessingModule>("Image processing has been cancelled by an event");
+                    return;
                 }
 
-                // Create a new cache to help process and cache the request.
-                DiskCache cache = new DiskCache(requestPath, fullPath, imageName);
-                string cachedPath = cache.CachedPath;
+                // Re-assign based on event handlers
+                queryString = validatingArgs.QueryString;
 
-                // Since we are now rewriting the path we need to check again that the current user has access
-                // to the rewritten path.
-                // Get the user for the current request
-                // If the user is anonymous or authentication doesn't work for this suffix avoid a NullReferenceException
-                // in the UrlAuthorizationModule by creating a generic identity.
-                string virtualCachedPath = cache.VirtualCachedPath;
-
-                IPrincipal user = context.User ?? new GenericPrincipal(new GenericIdentity(string.Empty, string.Empty), new string[0]);
-
-                // Do we have permission to call UrlAuthorizationModule.CheckUrlAccessForPrincipal?
-                PermissionSet permission = new PermissionSet(PermissionState.None);
-                permission.AddPermission(new AspNetHostingPermission(AspNetHostingPermissionLevel.Unrestricted));
-                bool hasPermission = permission.IsSubsetOf(AppDomain.CurrentDomain.PermissionSet);
-
-                bool isAllowed = true;
-
-                // Run the rewritten path past the authorization system again.
-                // We can then use the result as the default "AllowAccess" value
-                if (hasPermission && !context.SkipAuthorization)
+                // Break out if we don't meet critera.
+                bool interceptAll = interceptAllRequests != null && interceptAllRequests.Value;
+                if (string.IsNullOrWhiteSpace(requestPath) || (!interceptAll && string.IsNullOrWhiteSpace(queryString)))
                 {
-                    isAllowed = UrlAuthorizationModule.CheckUrlAccessForPrincipal(virtualCachedPath, user, "GET");
+                    return;
                 }
 
-                if (isAllowed)
+                // Check whether the path is valid for other requests.
+                // We've already checked the unprefixed requests in GetImageServiceForRequest().
+                if (!string.IsNullOrWhiteSpace(currentService.Prefix) && !currentService.IsValidRequest(requestPath))
                 {
+                    return;
+                }
+
+                using (await Locker.LockAsync(rawUrl))
+                {
+                    // Create a new cache to help process and cache the request.
+                    this.imageCache = (IImageCache)ImageProcessorConfiguration.Instance
+                        .ImageCache.GetInstance(requestPath, url, queryString);
+
                     // Is the file new or updated?
-                    bool isNewOrUpdated = cache.IsNewOrUpdatedFile(cachedPath);
+                    bool isNewOrUpdated = await this.imageCache.IsNewOrUpdatedAsync();
+                    string cachedPath = this.imageCache.CachedPath;
 
                     // Only process if the file has been updated.
                     if (isNewOrUpdated)
                     {
-                        // Process the image.
-                        using (ImageFactory imageFactory = new ImageFactory(preserveExifMetaData != null && preserveExifMetaData.Value))
+                        byte[] imageBuffer = null;
+                        string mimeType;
+
+                        try
                         {
-                            if (isRemote)
+                            imageBuffer = await currentService.GetImage(requestPath);
+                        }
+                        catch (HttpException ex)
+                        {
+                            // We want 404's to be handled by IIS so that other handlers/modules can still run.
+                            if (ex.GetHttpCode() == (int)HttpStatusCode.NotFound)
                             {
-                                using (await Locker.LockAsync(cachedPath))
+                                ImageProcessorBootstrapper.Instance.Logger.Log<ImageProcessingModule>(ex.Message);
+                                return;
+                            }
+                        }
+
+                        if (imageBuffer == null)
+                        {
+                            return;
+                        }
+
+                        // Using recyclable streams here should dramatically reduce the overhead required
+                        using (MemoryStream inStream = MemoryStreamPool.Shared.GetStream("inStream", imageBuffer, 0, imageBuffer.Length))
+                        {
+                            // Process the Image. Use a recyclable stream here to reduce the allocations
+                            MemoryStream outStream = MemoryStreamPool.Shared.GetStream();
+
+                            if (!string.IsNullOrWhiteSpace(queryString))
+                            {
+                                // Animation is not a processor but can be a specific request so we should allow it.
+                                bool processAnimation;
+                                AnimationProcessMode mode = this.ParseAnimationMode(queryString, out processAnimation);
+
+                                // Attempt to match querystring and processors.
+                                IWebGraphicsProcessor[] processors = ImageFactoryExtensions.GetMatchingProcessors(queryString);
+                                if (processors.Any() || processAnimation)
                                 {
-                                    Uri uri = new Uri(requestPath + "?" + urlParameters);
-                                    RemoteFile remoteFile = new RemoteFile(uri, false);
+                                    // Process the image.
+                                    bool exif = preserveExifMetaData != null && preserveExifMetaData.Value;
+                                    bool gamma = fixGamma != null && fixGamma.Value;
 
-                                    // Prevent response blocking.
-                                    WebResponse webResponse = await remoteFile.GetWebResponseAsync().ConfigureAwait(false);
-
-                                    using (MemoryStream memoryStream = new MemoryStream())
+                                    using (ImageFactory imageFactory = new ImageFactory(exif, gamma) { AnimationProcessMode = mode })
                                     {
-                                        using (WebResponse response = webResponse)
-                                        {
-                                            using (Stream responseStream = response.GetResponseStream())
-                                            {
-                                                if (responseStream != null)
-                                                {
-                                                    responseStream.CopyTo(memoryStream);
-
-                                                    // Reset the position of the stream to ensure we're reading the correct part.
-                                                    memoryStream.Position = 0;
-
-                                                    // Process the Image
-                                                    imageFactory.Load(memoryStream)
-                                                                .AutoProcess(queryString)
-                                                                .Save(cachedPath);
-
-                                                    // Add to the cache.
-                                                    cache.AddImageToCache(cachedPath);
-
-                                                    // Store the cached path, response type, and cache dependency in the context for later retrieval.
-                                                    context.Items[CachedPathKey] = cachedPath;
-                                                    context.Items[CachedResponseTypeKey] = imageFactory.CurrentImageFormat.MimeType;
-                                                    context.Items[CachedResponseFileDependency] = new List<string> { cachedPath };
-                                                }
-                                            }
-                                        }
+                                        imageFactory.Load(inStream).AutoProcess(processors).Save(outStream);
+                                        mimeType = imageFactory.CurrentImageFormat.MimeType;
                                     }
+                                }
+                                else if (this.ParseCacheBuster(queryString))
+                                {
+                                    // We're cachebustng. Allow the value to be cached
+                                    await inStream.CopyToAsync(outStream);
+                                    mimeType = FormatUtilities.GetFormat(outStream).MimeType;
+                                }
+                                else
+                                {
+                                    // No match? Someone is either attacking the server or hasn't read the instructions.
+                                    // Either way throw an exception to prevent caching.
+                                    string message = $"The request {request.Unvalidated.RawUrl} could not be understood by the server due to malformed syntax.";
+                                    ImageProcessorBootstrapper.Instance.Logger.Log<ImageProcessingModule>(message);
+                                    throw new HttpException((int)HttpStatusCode.BadRequest, message);
                                 }
                             }
                             else
                             {
-                                using (Locker.Lock(cachedPath))
-                                {   
-                                    // Check to see if the file exists.
-                                    // ReSharper disable once AssignNullToNotNullAttribute
-                                    if ((FileExists != null && !FileExists(requestPath)) && !File.Exists(requestPath))
-                                    {
-                                        throw new HttpException(404, "No image exists at " + fullPath);
-                                    }
+                                // We're capturing all requests.
+                                await inStream.CopyToAsync(outStream);
+                                mimeType = FormatUtilities.GetFormat(outStream).MimeType;
+                            }
 
-                                    // Process the Image
-                                    imageFactory.Load(requestPath)
-                                                .AutoProcess(queryString)
-                                                .Save(cachedPath);
+                            // Fire the post processing event.
+                            EventHandler<PostProcessingEventArgs> handler = OnPostProcessing;
+                            if (handler != null)
+                            {
+                                string extension = Path.GetExtension(cachedPath);
+                                PostProcessingEventArgs args = new PostProcessingEventArgs
+                                {
+                                    Context = context,
+                                    ImageStream = outStream,
+                                    ImageExtension = extension
+                                };
 
-                                    // Add to the cache.
-                                    cache.AddImageToCache(cachedPath);
+                                handler(this, args);
+                                outStream = args.ImageStream;
+                            }
 
-                                    // Store the cached path, response type, and cache dependencies in the context for later retrieval.
-                                    context.Items[CachedPathKey] = cachedPath;
-                                    context.Items[CachedResponseTypeKey] = imageFactory.CurrentImageFormat.MimeType;
-                                    var dependencies = new List<string> { cachedPath };
-                                    if (CachingFilter != null && CachingFilter(requestPath))
-	                                {
-		                                dependencies.Add(requestPath);
-	                                }
-                                    context.Items[CachedResponseFileDependency] = dependencies;
-                                }
+                            // Add to the cache.
+                            await this.imageCache.AddImageToCacheAsync(outStream, mimeType);
+
+                            // Cleanup
+                            outStream.Dispose();
+                        }
+
+                        // Store the response type and cache dependency in the context for later retrieval.
+                        context.Items[CachedResponseTypeKey] = mimeType;
+                        bool isFileCached = new Uri(cachedPath).IsFile;
+
+                        if (isFileLocal)
+                        {
+                            if (isFileCached)
+                            {
+                                // Some services might only provide filename so we can't monitor for the browser.
+                                context.Items[CachedResponseFileDependency] = Path.GetFileName(requestPath) == requestPath
+                                    ? new[] { cachedPath }
+                                    : new[] { requestPath, cachedPath };
+                            }
+                            else
+                            {
+                                context.Items[CachedResponseFileDependency] = Path.GetFileName(requestPath) == requestPath
+                                    ? null
+                                    : new[] { requestPath };
                             }
                         }
-                    }
-
-                    // Image is from the cache so the mime-type will need to be set.
-                    if (context.Items[CachedResponseTypeKey] == null)
-                    {
-                        string mimetype = ImageHelpers.GetMimeType(cachedPath);
-
-                        if (!string.IsNullOrEmpty(mimetype))
+                        else if (isFileCached)
                         {
-                            context.Items[CachedResponseTypeKey] = mimetype;
+                            context.Items[CachedResponseFileDependency] = new[] { cachedPath };
                         }
-                    }
-
-                    string incomingEtag = context.Request.Headers["If" + "-None-Match"];
-
-                    if (incomingEtag != null && !isNewOrUpdated)
-                    {
-                        // Set the Content-Length header so the client doesn't wait for
-                        // content but keeps the connection open for other requests.
-                        context.Response.AddHeader("Content-Length", "0");
-                        context.Response.StatusCode = (int)HttpStatusCode.NotModified;
-                        context.Response.SuppressContent = true;
-
-                        // WEBCENTRUM
-                        // This header causes the start of FileChangesMonitor on a directory in the DatabaseFileSystem when response is flushed
-                        // Added the Caching filter to allow more control
-                        if (!isRemote && (CachingFilter == null || CachingFilter(requestPath)))
-                        {
-                            // Set the headers and quit.
-                            this.SetHeaders(context, (string)context.Items[CachedResponseTypeKey], new List<string> { requestPath, cachedPath });
-                            return;
-                        }
-
-                        this.SetHeaders(context, (string)context.Items[CachedResponseTypeKey], new List<string> { cachedPath });
                     }
 
                     // The cached file is valid so just rewrite the path.
-                    context.RewritePath(virtualCachedPath, false);
+                    this.imageCache.RewritePath(context); // 
+
+                    // Redirect if not a locally store file.
+                    if (!new Uri(cachedPath).IsFile)
+                    {
+                        context.ApplicationInstance.CompleteRequest();
+                    }
+
+                    if (isNewOrUpdated)
+                    {
+                        // Trim the cache.
+                        await this.imageCache.TrimCacheAsync();
+                    }
                 }
-                else
-                {
-                    throw new HttpException(403, "Access denied");
-                }
-            }
-            else if (isRemote)
-            {
-                // Just re-point to the external url.
-                HttpContext.Current.Response.Redirect(requestPath);
             }
         }
 
         /// <summary>
-        /// This will make the browser and server keep the output
-        /// in its cache and thereby improve performance.
-        /// See http://en.wikipedia.org/wiki/HTTP_ETag
+        /// Return a value indicating whether common cache buster variables are being passed through.
         /// </summary>
-        /// <param name="context">
-        /// the <see cref="T:System.Web.HttpContext">HttpContext</see> object that provides
-        /// references to the intrinsic server objects
-        /// </param>
-        /// <param name="responseType">
-        /// The HTTP MIME type to to send.
-        /// </param>
-        /// <param name="dependencyPaths">
-        /// The dependency path for the cache dependency.
-        /// </param>
-        private void SetHeaders(HttpContext context, string responseType, IEnumerable<string> dependencyPaths)
+        /// <param name="queryString">The query string to search.</param>
+        /// <returns>
+        /// The <see cref="bool"/>.
+        /// </returns>
+        private bool ParseCacheBuster(string queryString)
         {
-            HttpResponse response = context.Response;
-
-            response.ContentType = responseType;
-
-            if (response.Headers["Image-Served-By"] == null)
+            NameValueCollection queryCollection = HttpUtility.ParseQueryString(queryString);
+            if (allowCacheBuster != null && allowCacheBuster.Value
+                && (queryCollection.AllKeys.Contains("v", StringComparer.InvariantCultureIgnoreCase)
+                || queryCollection.AllKeys.Contains("rnd", StringComparer.InvariantCultureIgnoreCase)))
             {
-                response.AddHeader("Image-Served-By", "ImageProcessor.Web/" + AssemblyVersion);
+                return true;
             }
 
-            HttpCachePolicy cache = response.Cache;
-            cache.SetCacheability(HttpCacheability.Public);
-            cache.VaryByHeaders["Accept-Encoding"] = true;
+            return false;
+        }
 
-            context.Response.AddFileDependencies(dependencyPaths.ToArray());
-            cache.SetLastModifiedFromFileDependencies();
+        /// <summary>
+        /// Gets the animation mode passed in through the querystring, defaults to the default behaviour (All) if nothing found.
+        /// </summary>
+        /// <param name="queryString">The query string to search.</param>
+        /// <param name="process">
+        /// Whether to process the request. True if <see cref="AnimationProcessMode.First"/>
+        /// has been explicitly requested.
+        /// </param>
+        /// <returns>
+        /// The process mode for frames in animated images.
+        /// </returns>
+        private AnimationProcessMode ParseAnimationMode(string queryString, out bool process)
+        {
+            AnimationProcessMode mode = AnimationProcessMode.All;
+            NameValueCollection queryCollection = HttpUtility.ParseQueryString(queryString);
+            process = false;
 
-            int maxDays = DiskCache.MaxFileCachedDuration;
+            if (queryCollection.AllKeys.Contains("animationprocessmode", StringComparer.InvariantCultureIgnoreCase))
+            {
+                mode = QueryParamParser.Instance.ParseValue<AnimationProcessMode>(queryCollection["animationprocessmode"]);
 
-            cache.SetExpires(DateTime.Now.ToUniversalTime().AddDays(maxDays));
-            cache.SetMaxAge(new TimeSpan(maxDays, 0, 0, 0));
-            cache.SetRevalidation(HttpCacheRevalidation.AllCaches);
+                // Common sense would dictate that requesting AnimationProcessMode.All is a pointless request
+                // since that is the default behaviour and shouldn't be requested on its own.
+                // But hey! this is the internet and it's impossible to stop people twisting your intent into
+                // whatever bizarre thing they choose. Those cats are crazy!
+                process = true;
+            }
+
+            return mode;
         }
 
         /// <summary>
         /// Replaces preset values stored in the configuration in the querystring.
         /// </summary>
-        /// <param name="queryString">
-        /// The query string.
-        /// </param>
+        /// <param name="queryString">The query string.</param>
         /// <returns>
         /// The <see cref="string"/> containing the updated querystring.
         /// </returns>
         private string ReplacePresetsInQueryString(string queryString)
         {
-            foreach (Match match in PresetRegex.Matches(queryString))
+            if (!string.IsNullOrWhiteSpace(queryString))
             {
-                if (match.Success)
+                foreach (Match match in PresetRegex.Matches(queryString))
                 {
-                    string preset = match.Value.Split('=')[1];
+                    if (match.Success)
+                    {
+                        string preset = match.Value.Split('=')[1];
 
-                    // We use the processor config system to store the preset values.
-                    string replacements = ImageProcessorConfiguration.Instance.GetPresetSettings(preset);
-                    queryString = Regex.Replace(queryString, preset, replacements ?? string.Empty);
+                        // We use the processor config system to store the preset values.
+                        string replacements = ImageProcessorConfiguration.Instance.GetPresetSettings(preset);
+                        queryString = Regex.Replace(queryString, match.Value, replacements ?? string.Empty);
+                    }
                 }
             }
 
             return queryString;
+        }
+
+        /// <summary>
+        /// Raises the ValidatingRequest event
+        /// </summary>
+        /// <param name="args">The <see cref="ValidatingRequestEventArgs"/></param>
+        private void OnValidatingRequest(ValidatingRequestEventArgs args)
+        {
+            ValidatingRequest?.Invoke(this, args);
+        }
+
+        /// <summary>
+        /// Checks if there is a handler that changes the querystring and executes that handler.
+        /// </summary>
+        /// <param name="context">The current request context.</param>
+        /// <param name="queryString">The query string.</param>
+        /// <param name="rawUrl">The raw request url.</param>
+        /// <returns>
+        /// The <see cref="string"/> containing the updated querystring.
+        /// </returns>
+        [Obsolete("This is here for legacy reasons, use the OnValidatingRequest method instead")]
+        private string CheckQuerystringHandler(HttpContext context, string queryString, string rawUrl)
+        {
+            // Fire the process querystring event.
+            ProcessQuerystringEventHandler handler = OnProcessQuerystring;
+            if (handler != null)
+            {
+                ProcessQueryStringEventArgs args = new ProcessQueryStringEventArgs
+                {
+                    Context = context,
+                    Querystring = queryString ?? string.Empty,
+                    RawUrl = rawUrl ?? string.Empty
+                };
+                queryString = handler(this, args);
+            }
+
+            return queryString;
+        }
+
+        /// <summary>
+        /// Gets the correct <see cref="IImageService"/> for the given request.
+        /// </summary>
+        /// <param name="url">The current image request url.</param>
+        /// <param name="applicationPath">The application path.</param>
+        /// <returns>
+        /// The <see cref="IImageService"/>.
+        /// </returns>
+        private IImageService GetImageServiceForRequest(string url, string applicationPath)
+        {
+            IList<IImageService> services = ImageProcessorConfiguration.Instance.ImageServices;
+
+            // Remove the Application Path from the Request.Path.
+            // This allows applications running on localhost as sub applications to work.
+            string path = url.Split('?')[0].TrimStart(applicationPath).TrimStart('/');
+            foreach (IImageService service in services)
+            {
+                string key = service.Prefix;
+                if (!string.IsNullOrWhiteSpace(key) && path.StartsWith(key, StringComparison.InvariantCultureIgnoreCase))
+                {
+                    return service;
+                }
+            }
+
+            // Return the file based service.
+            if (services.Any(s => s.GetType() == typeof(LocalFileImageService)))
+            {
+                IImageService service = services.First(s => s.GetType() == typeof(LocalFileImageService));
+                if (service.IsValidRequest(path))
+                {
+                    return service;
+                }
+            }
+
+            // Return the next unprefixed service.
+            return services.FirstOrDefault(s => string.IsNullOrWhiteSpace(s.Prefix) && s.IsValidRequest(path) && s.GetType() != typeof(LocalFileImageService));
         }
         #endregion
     }

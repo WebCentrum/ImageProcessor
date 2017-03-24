@@ -1,6 +1,6 @@
 ﻿// --------------------------------------------------------------------------------------------------------------------
-// <copyright file="Alpha.cs" company="James South">
-//   Copyright (c) James South.
+// <copyright file="Alpha.cs" company="James Jackson-South">
+//   Copyright (c) James Jackson-South.
 //   Licensed under the Apache License, Version 2.0.
 // </copyright>
 // <summary>
@@ -13,9 +13,9 @@ namespace ImageProcessor.Processors
     using System;
     using System.Collections.Generic;
     using System.Drawing;
-    using System.Drawing.Imaging;
 
     using ImageProcessor.Common.Exceptions;
+    using ImageProcessor.Imaging.Helpers;
 
     /// <summary>
     /// Encapsulates methods to change the alpha component of the image to effect its transparency.
@@ -31,7 +31,7 @@ namespace ImageProcessor.Processors
         }
 
         /// <summary>
-        /// Gets or sets DynamicParameter.
+        /// Gets or sets the dynamic parameter.
         /// </summary>
         public dynamic DynamicParameter
         {
@@ -60,51 +60,17 @@ namespace ImageProcessor.Processors
         /// </returns>
         public Image ProcessImage(ImageFactory factory)
         {
-            Bitmap newImage = null;
             Image image = factory.Image;
 
             try
             {
-                int alphaPercent = this.DynamicParameter;
-
-                newImage = new Bitmap(image.Width, image.Height, PixelFormat.Format32bppPArgb);
-
-                ColorMatrix colorMatrix = new ColorMatrix();
-                colorMatrix.Matrix00 = colorMatrix.Matrix11 = colorMatrix.Matrix22 = colorMatrix.Matrix44 = 1;
-                colorMatrix.Matrix33 = (float)alphaPercent / 100;
-
-                using (Graphics graphics = Graphics.FromImage(newImage))
-                {
-                    using (ImageAttributes imageAttributes = new ImageAttributes())
-                    {
-                        imageAttributes.SetColorMatrix(colorMatrix);
-
-                        graphics.DrawImage(
-                            image,
-                            new Rectangle(0, 0, image.Width, image.Height),
-                            0,
-                            0,
-                            image.Width,
-                            image.Height,
-                            GraphicsUnit.Pixel,
-                            imageAttributes);
-
-                        image.Dispose();
-                        image = newImage;
-                    }
-                }
+                int percentage = this.DynamicParameter;
+                return Adjustments.Alpha(image, percentage);
             }
             catch (Exception ex)
             {
-                if (newImage != null)
-                {
-                    newImage.Dispose();
-                }
-
                 throw new ImageProcessingException("Error processing image with " + this.GetType().Name, ex);
             }
-
-            return image;
         }
     }
 }

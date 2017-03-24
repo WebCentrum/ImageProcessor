@@ -1,6 +1,6 @@
 ﻿// --------------------------------------------------------------------------------------------------------------------
-// <copyright file="RemoteFile.cs" company="James South">
-//   Copyright (c) James South.
+// <copyright file="RemoteFile.cs" company="James Jackson-South">
+//   Copyright (c) James Jackson-South.
 //   Licensed under the Apache License, Version 2.0.
 // </copyright>
 // <summary>
@@ -10,20 +10,14 @@
 
 namespace ImageProcessor.Web.Helpers
 {
-    #region Using
     using System;
-    using System.Collections.Generic;
-    using System.Diagnostics;
     using System.Globalization;
-    using System.IO;
     using System.Net;
     using System.Security;
-    using System.Text;
     using System.Threading.Tasks;
     using System.Web;
 
-    using ImageProcessor.Web.Configuration;
-    #endregion
+    using ImageProcessor.Configuration;
 
     /// <summary>
     /// Encapsulates methods used to download files from a website address.
@@ -37,10 +31,10 @@ namespace ImageProcessor.Web.Helpers
     /// For example, the ImageProcessingModule accepts off-server addresses as a path. An attacker could, for instance, pass the url
     /// to a file that's a few gigs in size, causing the server to get out-of-memory exceptions or some other errors. An attacker
     /// could also use this same method to use one application instance to hammer another site by, again, passing an off-server
-    /// address of the victims site to the ImageProcessingModule. 
+    /// address of the victims site to the ImageProcessingModule.
     /// This class will not throw an exception if the Uri supplied points to a resource local to the running application instance.
     /// <para>
-    /// There shouldn't be any security issues there, as the internal WebRequest instance is still calling it remotely. 
+    /// There shouldn't be any security issues there, as the internal WebRequest instance is still calling it remotely.
     /// Any local files that shouldn't be accessed by this won't be allowed by the remote call.
     /// </para>
     /// Adapted from <see href="http://blogengine.codeplex.com">BlogEngine.Net</see>
@@ -49,45 +43,9 @@ namespace ImageProcessor.Web.Helpers
     {
         #region Fields
         /// <summary>
-        /// The white-list of url[s] from which to download remote files.
-        /// </summary>
-        public static readonly ImageSecuritySection.SafeUrl[] RemoteFileWhiteListExtensions = ImageProcessorConfiguration.Instance.RemoteFileWhiteListExtensions;
-
-        /// <summary>
-        /// The white-list of url[s] from which to download remote files.
-        /// </summary>
-        private static readonly Uri[] RemoteFileWhiteList = ImageProcessorConfiguration.Instance.RemoteFileWhiteList;
-
-        /// <summary>
-        /// The length of time, in milliseconds, that a remote file download attempt can last before timing out.
-        /// </summary>
-        private static readonly int TimeoutMilliseconds = ImageProcessorConfiguration.Instance.Timeout;
-
-        /// <summary>
-        /// The maximum size, in bytes, that a remote file download attempt can download.
-        /// </summary>
-        private static readonly int MaxBytes = ImageProcessorConfiguration.Instance.MaxBytes;
-
-        /// <summary>
-        /// Whether to allow remote downloads.
-        /// </summary>
-        private static readonly bool AllowRemoteDownloads = ImageProcessorConfiguration.Instance.AllowRemoteDownloads;
-
-        /// <summary>
-        /// Whether this RemoteFile instance is ignoring remote download rules set in the current application 
-        /// instance.
-        /// </summary>
-        private readonly bool ignoreRemoteDownloadSettings;
-
-        /// <summary>
-        /// The <see cref="T:System.Uri">Uri</see> of the remote file being downloaded.
-        /// </summary>
-        private readonly Uri url;
-
-        /// <summary>
         /// The maximum allowable download size in bytes.
         /// </summary>
-        private readonly int maxDownloadSize;
+        private int maxDownloadSize;
 
         /// <summary>
         /// The length of time, in milliseconds, that a remote file download attempt can last before timing out.
@@ -98,68 +56,38 @@ namespace ImageProcessor.Web.Helpers
         /// The <see cref="T:System.Net.WebResponse">WebResponse</see> object used internally for this RemoteFile instance.
         /// </summary>
         private WebRequest webRequest;
+
         #endregion
 
         #region Constructors
         /// <summary>
-        /// Initializes a new instance of the <see cref="T:ImageProcessor.Web.Helpers.RemoteFile">RemoteFile</see> class. 
+        /// Initializes a new instance of the <see cref="T:ImageProcessor.Web.Helpers.RemoteFile">RemoteFile</see> class.
         /// </summary>
         /// <param name="filePath">The url of the file to be downloaded.</param>
-        /// <param name="ignoreRemoteDownloadSettings">
-        /// If set to <see langword="true"/>, then RemoteFile should ignore the current the applications instance's remote download settings; otherwise,<see langword="false"/>.
-        /// </param>
-        internal RemoteFile(Uri filePath, bool ignoreRemoteDownloadSettings)
+        internal RemoteFile(Uri filePath)
         {
             if (filePath == null)
             {
-                throw new ArgumentNullException("filePath");
+                throw new ArgumentNullException(nameof(filePath));
             }
 
-            this.url = filePath;
-            this.ignoreRemoteDownloadSettings = ignoreRemoteDownloadSettings;
-            this.timeoutLength = TimeoutMilliseconds;
-            this.maxDownloadSize = MaxBytes;
+            this.Uri = filePath;
         }
         #endregion
 
         #region Properties
         /// <summary>
-        /// Gets a value indicating whether this RemoteFile instance is ignoring remote download rules set in the
-        /// current application instance.
-        /// <remarks>
-        /// This should only be set to true if the supplied url is a verified resource. Use at your own risk.
-        /// </remarks>
-        /// </summary>
-        /// <value>
-        /// <see langword="true"/> if this RemoteFile instance is ignoring remote download rules set in the current 
-        /// application instance; otherwise, <see langword="false"/>.
-        /// </value>
-        public bool IgnoreRemoteDownloadSettings
-        {
-            get
-            {
-                return this.ignoreRemoteDownloadSettings;
-            }
-        }
-
-        /// <summary>
         /// Gets the Uri of the remote file being downloaded.
         /// </summary>
-        public Uri Uri
-        {
-            get
-            {
-                return this.url;
-            }
-        }
+        public Uri Uri { get; }
 
         /// <summary>
-        /// Gets or sets the length of time, in milliseconds, that a remote file download attempt can 
+        /// Gets or sets the length of time, in milliseconds, that a remote file download attempt can
         /// last before timing out.
         /// <remarks>
         /// <para>
         /// This value can only be set if the instance is supposed to ignore the remote download settings set
-        /// in the current application instance. 
+        /// in the current application instance.
         /// </para>
         /// <para>
         /// Set this value to 0 if there should be no timeout.
@@ -170,16 +98,11 @@ namespace ImageProcessor.Web.Helpers
         {
             get
             {
-                return this.IgnoreRemoteDownloadSettings ? this.timeoutLength : TimeoutMilliseconds;
+                return this.timeoutLength;
             }
 
             set
             {
-                if (!this.IgnoreRemoteDownloadSettings)
-                {
-                    throw new SecurityException("Timeout length can not be adjusted on remote files that are abiding by remote download rules");
-                }
-
                 if (value < 0)
                 {
                     // ReSharper disable once NotResolvedInText
@@ -195,10 +118,10 @@ namespace ImageProcessor.Web.Helpers
         /// <remarks>
         /// <para>
         /// This value can only be set if the instance is supposed to ignore the remote download settings set
-        /// in the current application instance. 
+        /// in the current application instance.
         /// </para>
         /// <para>
-        /// Set this value to 0 if there should be no timeout.
+        /// Set this value to 0 if there should be no max bytes.
         /// </para>
         /// </remarks>
         /// </summary>
@@ -206,25 +129,26 @@ namespace ImageProcessor.Web.Helpers
         {
             get
             {
-                return this.IgnoreRemoteDownloadSettings ? this.maxDownloadSize : MaxBytes;
+                return this.maxDownloadSize;
             }
 
             set
             {
-                if (!this.IgnoreRemoteDownloadSettings)
-                {
-                    throw new SecurityException("Max Download Size can not be adjusted on remote files that are abiding by remote download rules");
-                }
-
                 if (value < 0)
                 {
                     // ReSharper disable once NotResolvedInText
                     throw new ArgumentOutOfRangeException("MaxDownloadSize");
                 }
 
-                this.timeoutLength = value;
+                this.maxDownloadSize = value;
             }
         }
+
+        /// <summary>
+        /// Gets or sets the UserAgent header to be passed when requesting the remote file
+        /// </summary>
+        public string UserAgent { get; set; }
+
         #endregion
 
         #region Methods
@@ -240,23 +164,31 @@ namespace ImageProcessor.Web.Helpers
         /// </summary>
         /// <returns>The <see cref="T:System.Net.WebResponse">WebResponse</see> used to download this file.</returns>
         /// <returns>
-        /// The <see cref="IEnumerable{Task}"/>.
+        /// The <see cref="IEnumerable{T}"/>.
         /// </returns>
         internal async Task<WebResponse> GetWebResponseAsync()
         {
-            WebResponse response = null;
+            WebResponse response;
             try
             {
                 response = await this.GetWebRequest().GetResponseAsync();
             }
             catch (WebException ex)
             {
-                if (ex.Status == WebExceptionStatus.NameResolutionFailure)
+                HttpWebResponse errorResponse = (HttpWebResponse)ex.Response;
+                if (errorResponse?.StatusCode == HttpStatusCode.NotFound || ex.Status == WebExceptionStatus.NameResolutionFailure)
                 {
-                    throw new HttpException(404, "No image exists at " + Uri);
+                    throw new HttpException((int)HttpStatusCode.NotFound, "No image exists at " + this.Uri, ex);
                 }
 
-                throw;
+                if (errorResponse?.StatusCode == HttpStatusCode.NotModified)
+                {
+                    response = errorResponse;
+                }
+                else
+                {
+                    throw;
+                }
             }
 
             if (response != null)
@@ -279,54 +211,17 @@ namespace ImageProcessor.Web.Helpers
                 if ((this.MaxDownloadSize > 0) && (contentLength > this.MaxDownloadSize))
                 {
                     response.Close();
-                    throw new SecurityException("An attempt to download a remote file has been halted because the file is larger than allowed.");
+                    string message = "An attempt to download a remote file has been halted because the file is larger than allowed.";
+                    ImageProcessorBootstrapper.Instance.Logger.Log<RemoteFile>(message);
+                    throw new SecurityException(message);
                 }
             }
 
             return response;
         }
-
-        /// <summary>
-        /// Returns the remote file as a String.       
-        /// <remarks>
-        /// This returns the resulting stream as a string as passed through a StreamReader.
-        /// </remarks>
-        /// </summary>
-        /// <returns>The remote file as a String.</returns>
-        internal string GetFileAsString()
-        {
-            Task<WebResponse> responseTask = this.GetWebResponseAsync();
-
-            using (WebResponse response = responseTask.Result)
-            {
-                Stream responseStream = response.GetResponseStream();
-
-                if (responseStream != null)
-                {
-                    // Pipe the stream to a stream reader with the required encoding format.
-                    using (StreamReader reader = new StreamReader(responseStream, Encoding.UTF8))
-                    {
-                        return reader.ReadToEnd();
-                    }
-                }
-
-                return string.Empty;
-            }
-        }
         #endregion
 
         #region Private
-        /// <summary>
-        /// Performs a check to see whether the application is able to download remote files.
-        /// </summary>
-        private void CheckCanDownload()
-        {
-            if (!this.IgnoreRemoteDownloadSettings && !AllowRemoteDownloads)
-            {
-                throw new SecurityException("Application is not configured to allow remote file downloads.");
-            }
-        }
-
         /// <summary>
         /// Creates the WebRequest object used internally for this RemoteFile instance.
         /// </summary>
@@ -339,17 +234,17 @@ namespace ImageProcessor.Web.Helpers
         /// </returns>
         private WebRequest GetWebRequest()
         {
-            // Check downloads are allowed.
-            this.CheckCanDownload();
-
-            // Check the url is from a whitelisted location.
-            this.CheckSafeUrlLocation();
-
             if (this.webRequest == null)
             {
                 HttpWebRequest request = (HttpWebRequest)WebRequest.Create(this.Uri);
                 request.Headers["Accept-Encoding"] = "gzip";
                 request.Headers["Accept-Language"] = "en-us";
+
+                if (!string.IsNullOrEmpty(this.UserAgent))
+                {
+                    request.UserAgent = this.UserAgent;
+                }
+
                 request.Credentials = CredentialCache.DefaultNetworkCredentials;
                 request.AutomaticDecompression = DecompressionMethods.GZip;
 
@@ -362,39 +257,6 @@ namespace ImageProcessor.Web.Helpers
             }
 
             return this.webRequest;
-        }
-
-        /// <summary>
-        /// Returns a value indicating whether the current url is in a list of safe download locations.
-        /// </summary>
-        private void CheckSafeUrlLocation()
-        {
-            string upper = this.url.Host.ToUpperInvariant();
-
-            // Check for root or subdomain.
-            bool validUrl = false;
-            foreach (Uri uri in RemoteFileWhiteList)
-            {
-                if (!uri.IsAbsoluteUri)
-                {
-                    Uri rebaseUri = new Uri("http://" + uri.ToString().TrimStart(new[] { '.', '/' }));
-                    validUrl = upper.StartsWith(rebaseUri.Host.ToUpperInvariant()) || upper.EndsWith(rebaseUri.Host.ToUpperInvariant());
-                }
-                else
-                {
-                    validUrl = upper.StartsWith(uri.Host.ToUpperInvariant()) || upper.EndsWith(uri.Host.ToUpperInvariant());
-                }
-
-                if (validUrl)
-                {
-                    break;
-                }
-            }
-
-            if (!validUrl)
-            {
-                throw new SecurityException("Application is not configured to allow remote file downloads from this domain.");
-            }
         }
         #endregion
         #endregion

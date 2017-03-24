@@ -1,6 +1,6 @@
 ﻿// --------------------------------------------------------------------------------------------------------------------
-// <copyright file="MemCache.cs" company="James South">
-//   Copyright (c) James South.
+// <copyright file="MemCache.cs" company="James Jackson-South">
+//   Copyright (c) James Jackson-South.
 //   Licensed under the Apache License, Version 2.0.
 // </copyright>
 // <summary>
@@ -10,31 +10,34 @@
 
 namespace ImageProcessor.Web.Caching
 {
-    #region Using
     using System;
     using System.Collections.Concurrent;
     using System.Collections.Generic;
     using System.Runtime.Caching;
-    #endregion
+    using System.Threading;
+
+    using ImageProcessor.Common.Helpers;
 
     /// <summary>
     /// Encapsulates methods that allow the caching and retrieval of objects from the in memory cache.
     /// </summary>
     internal static class MemCache
     {
-        #region Fields
         /// <summary>
         /// The cache
         /// </summary>
         private static readonly ObjectCache Cache = MemoryCache.Default;
 
         /// <summary>
+        /// The reader-writer lock implementation.
+        /// </summary>
+        private static readonly ReaderWriterLockSlim Locker = new ReaderWriterLockSlim();
+
+        /// <summary>
         /// An internal list of cache keys to allow bulk removal.
         /// </summary>
         private static readonly ConcurrentDictionary<string, string> CacheItems = new ConcurrentDictionary<string, string>();
-        #endregion
 
-        #region Methods
         /// <summary>
         /// Adds an item to the cache.
         /// </summary>
@@ -61,8 +64,7 @@ namespace ImageProcessor.Web.Caching
         public static bool AddItem(string key, object value, CacheItemPolicy policy = null, string regionName = null)
         {
             bool isAdded;
-
-            lock (Cache)
+            using (new WriteLock(Locker))
             {
                 if (policy == null)
                 {
@@ -105,7 +107,10 @@ namespace ImageProcessor.Web.Caching
         /// </returns>
         public static object GetItem(string key, string regionName = null)
         {
-            return Cache.Get(key, regionName);
+            using (new UpgradeableReadLock(Locker))
+            {
+                return Cache.Get(key, regionName);
+            }
         }
 
         /// <summary>
@@ -131,7 +136,7 @@ namespace ImageProcessor.Web.Caching
         /// True if the update try succeeds, or false if there is an already an entry
         ///  in the cache with the same key as key.
         /// </returns>
-        public static bool UpdateItem(string key, object value, CacheItemPolicy policy = null, string regionName = null) 
+        public static bool UpdateItem(string key, object value, CacheItemPolicy policy = null, string regionName = null)
         {
             bool isUpDated = true;
 
@@ -175,7 +180,7 @@ namespace ImageProcessor.Web.Caching
         {
             bool isRemoved;
 
-            lock (Cache)
+            using (new WriteLock(Locker))
             {
                 isRemoved = Cache.Remove(key, regionName) != null;
 
@@ -202,7 +207,7 @@ namespace ImageProcessor.Web.Caching
         {
             bool isCleared = false;
 
-            lock (CacheItems)
+            using (new WriteLock(Locker))
             {
                 // You can't remove items from a collection whilst you are iterating over it so you need to 
                 // create a collection to store the items to remove.
@@ -237,6 +242,5 @@ namespace ImageProcessor.Web.Caching
 
             return isCleared;
         }
-        #endregion
     }
 }

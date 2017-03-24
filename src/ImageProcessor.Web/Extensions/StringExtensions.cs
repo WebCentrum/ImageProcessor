@@ -1,6 +1,6 @@
 ﻿// --------------------------------------------------------------------------------------------------------------------
-// <copyright file="StringExtensions.cs" company="James South">
-//   Copyright (c) James South.
+// <copyright file="StringExtensions.cs" company="James Jackson-South">
+//   Copyright (c) James Jackson-South.
 //   Licensed under the Apache License, Version 2.0.
 // </copyright>
 // <summary>
@@ -65,7 +65,7 @@ namespace ImageProcessor.Web.Extensions
             }
         }
         #endregion
-        
+
         #region Numbers
         /// <summary>
         /// Creates an array of integers scraped from the String.
@@ -76,7 +76,7 @@ namespace ImageProcessor.Web.Extensions
         {
             if (string.IsNullOrWhiteSpace(expression))
             {
-                throw new ArgumentNullException("expression");
+                throw new ArgumentNullException(nameof(expression));
             }
 
             Regex regex = new Regex(@"[\d+]+(?=[,-])|[\d+]+(?![,-])", RegexOptions.Compiled);
@@ -105,7 +105,7 @@ namespace ImageProcessor.Web.Extensions
         {
             if (string.IsNullOrWhiteSpace(expression))
             {
-                throw new ArgumentNullException("expression");
+                throw new ArgumentNullException(nameof(expression));
             }
 
             Regex regex = new Regex(@"[\d+\.]+(?=[,-])|[\d+\.]+(?![,-])", RegexOptions.Compiled);
@@ -139,5 +139,22 @@ namespace ImageProcessor.Web.Extensions
             return Uri.TryCreate(expression, UriKind.Relative, out uri) && uri.IsWellFormedOriginalString();
         }
         #endregion
+
+        /// <summary>
+        /// Trims a specified string from the start of another string.
+        /// </summary>
+        /// <param name="target">The target string</param>
+        /// <param name="trimString">The string to trim from the start</param>
+        /// <returns>Returns the trimmed string</returns>
+        public static string TrimStart(this string target, string trimString)
+        {
+            string result = target;
+            while (result.StartsWith(trimString))
+            {
+                result = result.Substring(trimString.Length);
+            }
+
+            return result;
+        }
     }
 }

@@ -1,6 +1,6 @@
 ﻿// --------------------------------------------------------------------------------------------------------------------
-// <copyright file="GifFormat.cs" company="James South">
-//   Copyright (c) James South.
+// <copyright file="GifFormat.cs" company="James Jackson-South">
+//   Copyright (c) James Jackson-South.
 //   Licensed under the Apache License, Version 2.0.
 // </copyright>
 // <summary>
@@ -16,54 +16,42 @@ namespace ImageProcessor.Imaging.Formats
     using System.IO;
     using System.Text;
 
+    using ImageProcessor.Imaging.Quantizers;
+
     /// <summary>
     /// Provides the necessary information to support gif images.
     /// </summary>
-    public class GifFormat : FormatBase
+    public class GifFormat : FormatBase, IQuantizableImageFormat, IAnimatedImageFormat
     {
+        /// <summary>
+        /// Gets or sets the process mode for frames in animated images.
+        /// </summary>
+        public AnimationProcessMode AnimationProcessMode { get; set; }
+
         /// <summary>
         /// Gets the file headers.
         /// </summary>
-        public override byte[][] FileHeaders
-        {
-            get
-            {
-                return new[] { Encoding.ASCII.GetBytes("GIF") };
-            }
-        }
+        public override byte[][] FileHeaders => new[] { Encoding.ASCII.GetBytes("GIF") };
 
         /// <summary>
         /// Gets the list of file extensions.
         /// </summary>
-        public override string[] FileExtensions
-        {
-            get
-            {
-                return new[] { "gif" };
-            }
-        }
+        public override string[] FileExtensions => new[] { "gif" };
 
         /// <summary>
         /// Gets the standard identifier used on the Internet to indicate the type of data that a file contains. 
         /// </summary>
-        public override string MimeType
-        {
-            get
-            {
-                return "image/gif";
-            }
-        }
+        public override string MimeType => "image/gif";
 
         /// <summary>
         /// Gets the <see cref="ImageFormat" />.
         /// </summary>
-        public override ImageFormat ImageFormat
-        {
-            get
-            {
-                return ImageFormat.Gif;
-            }
-        }
+        public override ImageFormat ImageFormat => ImageFormat.Gif;
+
+        /// <summary>
+        /// Gets or sets the quantizer for reducing the image palette.
+        /// </summary>
+        public IQuantizer Quantizer { get; set; } = new OctreeQuantizer(255, 8);
 
         /// <summary>
         /// Applies the given processor the current image.
@@ -72,71 +60,59 @@ namespace ImageProcessor.Imaging.Formats
         /// <param name="factory">The <see cref="ImageFactory" />.</param>
         public override void ApplyProcessor(Func<ImageFactory, Image> processor, ImageFactory factory)
         {
-            GifInfo info = FormatUtilities.GetGifInfo(factory.Image, this.ImageFormat);
+            GifDecoder decoder = new GifDecoder(factory.Image, factory.AnimationProcessMode);
+            Image factoryImage = factory.Image;
+            GifEncoder encoder = new GifEncoder(null, null, decoder.LoopCount);
 
-            if (info.IsAnimated)
+            for (int i = 0; i < decoder.FrameCount; i++)
             {
-                OctreeQuantizer quantizer = new OctreeQuantizer(255, 8);
+                GifFrame frame = decoder.GetFrame(factoryImage, i);
+                factory.Image = frame.Image;
+                frame.Image = this.Quantizer.Quantize(processor.Invoke(factory));
+                encoder.AddFrame(frame);
+            }
 
-                // We don't dispose of the memory stream as that is disposed when a new image is created and doing so 
-                // beforehand will cause an exception.
-                MemoryStream stream = new MemoryStream();
-                using (GifEncoder encoder = new GifEncoder(stream, null, null, info.LoopCount))
+            factoryImage.Dispose();
+            factory.Image = encoder.Save();
+        }
+
+        /// <inheritdoc />
+        public override Image Save(Stream stream, Image image, long bitDepth)
+        {
+            // Never use default save for gifs. It's terrible.
+            GifDecoder decoder = new GifDecoder(image, AnimationProcessMode.All);
+            GifEncoder encoder = new GifEncoder(null, null, decoder.LoopCount);
+
+            for (int i = 0; i < decoder.FrameCount; i++)
+            {
+                GifFrame frame = decoder.GetFrame(image, i);
+                frame.Image = this.Quantizer.Quantize(frame.Image);
+                encoder.AddFrame(frame);
+            }
+
+            encoder.Save(stream);
+            return encoder.Save();
+        }
+
+        /// <inheritdoc />
+        public override Image Save(string path, Image image, long bitDepth)
+        {
+            // Never use default save for gifs. It's terrible.
+            using (FileStream fs = File.OpenWrite(path))
+            {
+                GifDecoder decoder = new GifDecoder(image, AnimationProcessMode.All);
+                GifEncoder encoder = new GifEncoder(null, null, decoder.LoopCount);
+
+                for (int i = 0; i < decoder.FrameCount; i++)
                 {
-                    foreach (GifFrame frame in info.GifFrames)
-                    {
-                        factory.Image = frame.Image;
-                        frame.Image = quantizer.Quantize(processor.Invoke(factory));
-                        encoder.AddFrame(frame);
-                    }
+                    GifFrame frame = decoder.GetFrame(image, i);
+                    frame.Image = this.Quantizer.Quantize(frame.Image);
+                    encoder.AddFrame(frame);
                 }
 
-                stream.Position = 0;
-                factory.Image = Image.FromStream(stream);
+                encoder.Save(fs);
+                return encoder.Save();
             }
-            else
-            {
-                base.ApplyProcessor(processor, factory);
-            }
-        }
-
-        /// <summary>
-        /// Saves the current image to the specified output stream.
-        /// </summary>
-        /// <param name="stream">
-        /// The <see cref="T:System.IO.Stream" /> to save the image information to.
-        /// </param>
-        /// <param name="image">The <see cref="T:System.Drawing.Image" /> to save.</param>
-        /// <returns>
-        /// The <see cref="T:System.Drawing.Image" />.
-        /// </returns>
-        public override Image Save(Stream stream, Image image)
-        {
-            if (!FormatUtilities.IsAnimated(image))
-            {
-                image = new OctreeQuantizer(255, 8).Quantize(image);
-            }
-
-            return base.Save(stream, image);
-        }
-
-        /// <summary>
-        /// Saves the current image to the specified file path.
-        /// </summary>
-        /// <param name="path">The path to save the image to.</param>
-        /// <param name="image">The 
-        /// <see cref="T:System.Drawing.Image" /> to save.</param>
-        /// <returns>
-        /// The <see cref="T:System.Drawing.Image" />.
-        /// </returns>
-        public override Image Save(string path, Image image)
-        {
-            if (!FormatUtilities.IsAnimated(image))
-            {
-                image = new OctreeQuantizer(255, 8).Quantize(image);
-            }
-
-            return base.Save(path, image);
         }
     }
 }

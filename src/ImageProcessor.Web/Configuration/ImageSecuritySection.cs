@@ -1,6 +1,6 @@
 ﻿// --------------------------------------------------------------------------------------------------------------------
-// <copyright file="ImageSecuritySection.cs" company="James South">
-//   Copyright (c) James South.
+// <copyright file="ImageSecuritySection.cs" company="James Jackson-South">
+//   Copyright (c) James Jackson-South.
 //   Licensed under the Apache License, Version 2.0.
 // </copyright>
 // <summary>
@@ -10,7 +10,6 @@
 
 namespace ImageProcessor.Web.Configuration
 {
-    #region Using
     using System;
     using System.Configuration;
     using System.IO;
@@ -18,91 +17,44 @@ namespace ImageProcessor.Web.Configuration
 
     using ImageProcessor.Web.Helpers;
 
-    #endregion
-
     /// <summary>
     /// Represents an image security section within a configuration file.
     /// </summary>
     public sealed class ImageSecuritySection : ConfigurationSection
     {
-        #region Properties
         /// <summary>
-        /// Gets or sets a value indicating whether the current application is allowed download remote files.
+        /// Gets the <see cref="CORSOriginElement"/>
         /// </summary>
-        /// <value><see langword="true"/> if the current application is allowed download remote files; otherwise, <see langword="false"/>.</value>
-        [ConfigurationProperty("allowRemoteDownloads", DefaultValue = false, IsRequired = true)]
-        public bool AllowRemoteDownloads
-        {
-            get { return (bool)this["allowRemoteDownloads"]; }
-            set { this["allowRemoteDownloads"] = value; }
-        }
-
-        /// <summary>
-        /// Gets or sets the maximum allowed remote file timeout in milliseconds for the application.
-        /// </summary>
-        /// <value>The maximum number of days to store an image in the cache.</value>
-        /// <remarks>Defaults to 30000 (30 seconds) if not set.</remarks>
-        [ConfigurationProperty("timeout", DefaultValue = "300000", IsRequired = true)]
-        public int Timeout
+        /// <value>The <see cref="CORSOriginElement"/></value>
+        [ConfigurationProperty("cors", IsRequired = false)]
+        public CORSOriginElement CORSOrigin
         {
             get
             {
-                return (int)this["timeout"];
-            }
-
-            set
-            {
-                this["timeout"] = value;
+                object o = this["cors"];
+                return o as CORSOriginElement;
             }
         }
 
         /// <summary>
-        /// Gets or sets the maximum allowed remote file size in bytes for the application.
+        /// Gets the <see cref="ServiceElementCollection"/>
         /// </summary>
-        /// <value>The maximum number of days to store an image in the cache.</value>
-        /// <remarks>Defaults to 4194304 (4Mb) if not set.</remarks>
-        [ConfigurationProperty("maxBytes", DefaultValue = "4194304", IsRequired = true)]
-        public int MaxBytes
+        /// <value>The <see cref="ServiceElementCollection"/></value>
+        [ConfigurationProperty("services", IsRequired = true)]
+        public ServiceElementCollection ImageServices
         {
             get
             {
-                return (int)this["maxBytes"];
-            }
-
-            set
-            {
-                this["maxBytes"] = value;
+                object o = this["services"];
+                return o as ServiceElementCollection;
             }
         }
 
         /// <summary>
-        /// Gets or sets the prefix for remote files for the application.
+        /// Gets or sets a value indicating whether to auto load services.
         /// </summary>
-        /// <value>The prefix for remote files for the application.</value>
-        [ConfigurationProperty("remotePrefix", DefaultValue = "", IsRequired = true)]
-        public string RemotePrefix
-        {
-            get { return (string)this["remotePrefix"]; }
+        public bool AutoLoadServices { get; set; }
 
-            set { this["remotePrefix"] = value; }
-        }
-
-        /// <summary>
-        /// Gets the <see cref="T:ImageProcessor.Web.Config.ImageSecuritySection.WhiteListElementCollection"/>
-        /// </summary>
-        /// <value>The <see cref="T:ImageProcessor.Web.Config.ImageSecuritySection.WhiteListElementCollection"/></value>
-        [ConfigurationProperty("whiteList", IsRequired = true)]
-        public WhiteListElementCollection WhiteList
-        {
-            get
-            {
-                object o = this["whiteList"];
-                return o as WhiteListElementCollection;
-            }
-        }
-        #endregion
-
-        #region Methods
         /// <summary>
         /// Retrieves the security configuration section from the current application configuration. 
         /// </summary>
@@ -113,17 +65,168 @@ namespace ImageProcessor.Web.Configuration
 
             if (imageSecuritySection != null)
             {
+                imageSecuritySection.AutoLoadServices = false;
                 return imageSecuritySection;
             }
 
-            string section = ResourceHelpers.ResourceAsString("ImageProcessor.Web.Configuration.Resources.security.config");
-            XmlReader reader = new XmlTextReader(new StringReader(section));
-            imageSecuritySection = new ImageSecuritySection();
-            imageSecuritySection.DeserializeSection(reader);
+            string section = ResourceHelpers.ResourceAsString("ImageProcessor.Web.Configuration.Resources.security.config.transform");
 
+            using (XmlReader reader = new XmlTextReader(new StringReader(section)))
+            {
+                imageSecuritySection = new ImageSecuritySection();
+                imageSecuritySection.DeserializeSection(reader);
+            }
+
+            imageSecuritySection.AutoLoadServices = true;
             return imageSecuritySection;
         }
-        #endregion
+
+        /// <summary>
+        /// Represents a ServiceElement configuration element within the configuration.
+        /// </summary>
+        public class ServiceElement : ConfigurationElement
+        {
+            /// <summary>
+            /// Gets or sets the name of the service.
+            /// </summary>
+            /// <value>The name of the service.</value>
+            [ConfigurationProperty("name", DefaultValue = "", IsRequired = true)]
+            public string Name
+            {
+                get { return (string)this["name"]; }
+
+                set { this["name"] = value; }
+            }
+
+            /// <summary>
+            /// Gets or sets the prefix of the service.
+            /// </summary>
+            /// <value>The prefix of the service.</value>
+            [ConfigurationProperty("prefix", DefaultValue = "", IsRequired = false)]
+            public string Prefix
+            {
+                get { return (string)this["prefix"]; }
+
+                set { this["prefix"] = value; }
+            }
+
+            /// <summary>
+            /// Gets or sets the type of the service.
+            /// </summary>
+            /// <value>The full Type definition of the service</value>
+            [ConfigurationProperty("type", DefaultValue = "", IsRequired = true)]
+            public string Type
+            {
+                get { return (string)this["type"]; }
+
+                set { this["type"] = value; }
+            }
+
+            /// <summary>
+            /// Gets the <see cref="SettingElementCollection"/>.
+            /// </summary>
+            /// <value>
+            /// The <see cref="SettingElementCollection"/>.
+            /// </value>
+            [ConfigurationProperty("settings", IsRequired = false)]
+            public SettingElementCollection Settings => this["settings"] as SettingElementCollection;
+
+            /// <summary>
+            /// Gets the <see cref="T:ImageProcessor.Web.Config.ImageSecuritySection.WhiteListElementCollection"/>.
+            /// </summary>
+            /// <value>
+            /// The <see cref="T:ImageProcessor.Web.Config.ImageSecuritySection.WhiteListElementCollection"/>.
+            /// </value>
+            [ConfigurationProperty("whitelist", IsRequired = false)]
+            public WhiteListElementCollection WhiteList => this["whitelist"] as WhiteListElementCollection;
+        }
+
+        /// <summary>
+        /// Represents a collection of <see cref="ServiceElement"/> elements within the configuration.
+        /// </summary>
+        public class ServiceElementCollection : ConfigurationElementCollection
+        {
+            /// <summary>
+            /// Gets the type of the <see cref="ConfigurationElementCollection"/>.
+            /// </summary>
+            /// <value>
+            /// The <see cref="ConfigurationElementCollectionType"/> of this collection.
+            /// </value>
+            public override ConfigurationElementCollectionType CollectionType => ConfigurationElementCollectionType.BasicMap;
+
+            /// <summary>
+            /// Gets the name used to identify this collection of elements in the configuration file when overridden in a derived class.
+            /// </summary>
+            /// <value>
+            /// The name of the collection; otherwise, an empty string. The default is an empty string.
+            /// </value>
+            protected override string ElementName => "service";
+
+            /// <summary>
+            /// Gets or sets the <see cref="T:ImageProcessor.Web.Config.ImageSecuritySection.ServiceElement"/>
+            /// at the specified index within the collection.
+            /// </summary>
+            /// <param name="index">The index at which to get the specified object.</param>
+            /// <returns>
+            /// The <see cref="T:ImageProcessor.Web.Config.ImageSecuritySection.ServiceElement"/>
+            /// at the specified index within the collection.
+            /// </returns>
+            public ServiceElement this[int index]
+            {
+                get
+                {
+                    return (ServiceElement)this.BaseGet(index);
+                }
+
+                set
+                {
+                    if (this.BaseGet(index) != null)
+                    {
+                        this.BaseRemoveAt(index);
+                    }
+
+                    this.BaseAdd(index, value);
+                }
+            }
+
+            /// <summary>
+            /// When overridden in a derived class, creates a new <see cref="ConfigurationElement"/>.
+            /// </summary>
+            /// <returns>
+            /// A new <see cref="ConfigurationElement"/>.
+            /// </returns>
+            protected override ConfigurationElement CreateNewElement()
+            {
+                return new ServiceElement();
+            }
+
+            /// <summary>
+            /// Gets the element key for a specified configuration element when overridden in a derived class.
+            /// </summary>
+            /// <returns>
+            /// An <see cref="T:System.Object"/> that acts as the key for the specified <see cref="ConfigurationElement"/>.
+            /// </returns>
+            /// <param name="element">The <see cref="ConfigurationElement"/> to return the key for. </param>
+            protected override object GetElementKey(ConfigurationElement element)
+            {
+                return ((ServiceElement)element).Name;
+            }
+        }
+
+        /// <summary>
+        /// Represents a CORSOriginsElement configuration element within the configuration.
+        /// </summary>
+        public class CORSOriginElement : ConfigurationElement
+        {
+            /// <summary>
+            /// Gets the <see cref="T:ImageProcessor.Web.Config.ImageSecuritySection.WhiteListElementCollection"/>.
+            /// </summary>
+            /// <value>
+            /// The <see cref="T:ImageProcessor.Web.Config.ImageSecuritySection.WhiteListElementCollection"/>.
+            /// </value>
+            [ConfigurationProperty("whitelist", IsRequired = false)]
+            public WhiteListElementCollection WhiteList => this["whitelist"] as WhiteListElementCollection;
+        }
 
         /// <summary>
         /// Represents a whitelist collection configuration element within the configuration.
@@ -167,7 +270,7 @@ namespace ImageProcessor.Web.Configuration
             /// <summary>
             /// Gets the element key for a specified whitelist configuration element.
             /// </summary>
-            /// <param name="element">The <see cref="T:System.Configuration.ConfigurationElement">ConfigurationElement</see> to return the key for.</param>
+            /// <param name="element">The <see cref="ConfigurationElement">ConfigurationElement</see> to return the key for.</param>
             /// <returns>The element key for a specified whitelist configuration element.</returns>
             protected override object GetElementKey(ConfigurationElement element)
             {
@@ -187,31 +290,9 @@ namespace ImageProcessor.Web.Configuration
             [ConfigurationProperty("url", DefaultValue = "", IsRequired = true)]
             public Uri Url
             {
-                get { return (Uri)this["url"]; }
+                get { return new Uri(this["url"].ToString(), UriKind.RelativeOrAbsolute); }
 
                 set { this["url"] = value; }
-            }
-
-            /// <summary>
-            /// Gets or sets a value indicating whether the white listed url is extension-less.
-            /// </summary>
-            [ConfigurationProperty("extensionLess", DefaultValue = false, IsRequired = false)]
-            public bool ExtensionLess
-            {
-                get { return (bool)this["extensionLess"]; }
-
-                set { this["extensionLess"] = value; }
-            }
-
-            /// <summary>
-            /// Gets or sets the image format for the extension-less url.
-            /// </summary>
-            [ConfigurationProperty("imageFormat", DefaultValue = "", IsRequired = false)]
-            public string ImageFormat
-            {
-                get { return (string)this["imageFormat"]; }
-
-                set { this["imageFormat"] = value; }
             }
         }
     }

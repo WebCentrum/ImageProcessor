@@ -1,6 +1,6 @@
 ﻿// --------------------------------------------------------------------------------------------------------------------
-// <copyright file="ResizeLayer.cs" company="James South">
-//   Copyright (c) James South.
+// <copyright file="ResizeLayer.cs" company="James Jackson-South">
+//   Copyright (c) James Jackson-South.
 //   Licensed under the Apache License, Version 2.0.
 // </copyright>
 // <summary>
@@ -11,7 +11,11 @@
 namespace ImageProcessor.Imaging
 {
     #region Using
+
+    using System.Collections.Generic;
     using System.Drawing;
+    using System.Linq;
+
     #endregion
 
     /// <summary>
@@ -19,7 +23,6 @@ namespace ImageProcessor.Imaging
     /// </summary>
     public class ResizeLayer
     {
-        #region Constructors
         /// <summary>
         /// Initializes a new instance of the <see cref="ResizeLayer"/> class.
         /// </summary>
@@ -35,24 +38,54 @@ namespace ImageProcessor.Imaging
         /// <param name="upscale">
         /// Whether to allow up-scaling of images. (Default true)
         /// </param>
+        /// <param name="centerCoordinates">
+        /// The center coordinates (Default null)
+        /// </param>
+        /// <param name="maxSize">
+        /// The maximum size to resize an image to. 
+        /// Used to restrict resizing based on calculated resizing
+        /// </param>
+        /// <param name="restrictedSizes">
+        /// The range of sizes to restrict resizing an image to. 
+        /// Used to restrict resizing based on calculated resizing
+        /// </param>
+        /// <param name="anchorPoint">
+        /// The anchor point (Default null)
+        /// </param>
         public ResizeLayer(
             Size size,
             ResizeMode resizeMode = ResizeMode.Pad,
             AnchorPosition anchorPosition = AnchorPosition.Center,
-            bool upscale = true)
+            bool upscale = true,
+            float[] centerCoordinates = null,
+            Size? maxSize = null,
+            List<Size> restrictedSizes = null,
+            Point? anchorPoint = null)
         {
             this.Size = size;
             this.Upscale = upscale;
             this.ResizeMode = resizeMode;
             this.AnchorPosition = anchorPosition;
+            this.CenterCoordinates = centerCoordinates ?? new float[] { };
+            this.MaxSize = maxSize;
+            this.RestrictedSizes = restrictedSizes ?? new List<Size>();
+            this.AnchorPoint = anchorPoint;
         }
-        #endregion
 
-        #region Properties
         /// <summary>
         /// Gets or sets the size.
         /// </summary>
         public Size Size { get; set; }
+
+        /// <summary>
+        /// Gets or sets the max size.
+        /// </summary>
+        public Size? MaxSize { get; set; }
+
+        /// <summary>
+        /// Gets or sets the restricted range of sizes. to restrict resizing methods to.
+        /// </summary>
+        public List<Size> RestrictedSizes { get; set; }
 
         /// <summary>
         /// Gets or sets the resize mode.
@@ -66,6 +99,7 @@ namespace ImageProcessor.Imaging
 
         /// <summary>
         /// Gets or sets a value indicating whether to allow up-scaling of images.
+        /// For <see cref="T:ResizeMode.BoxPad"/> this is always true.
         /// </summary>
         public bool Upscale { get; set; }
 
@@ -74,7 +108,10 @@ namespace ImageProcessor.Imaging
         /// </summary>
         public float[] CenterCoordinates { get; set; }
 
-        #endregion
+        /// <summary>
+        /// Gets or sets the anchor point.
+        /// </summary>
+        public Point? AnchorPoint { get; set; }
 
         /// <summary>
         /// Returns a value that indicates whether the specified object is an 
@@ -100,21 +137,39 @@ namespace ImageProcessor.Imaging
             return this.Size == resizeLayer.Size
                 && this.ResizeMode == resizeLayer.ResizeMode
                 && this.AnchorPosition == resizeLayer.AnchorPosition
-                && this.Upscale == resizeLayer.Upscale;
+                && this.Upscale == resizeLayer.Upscale
+                && ((this.CenterCoordinates != null
+                    && resizeLayer.CenterCoordinates != null
+                    && this.CenterCoordinates.SequenceEqual(resizeLayer.CenterCoordinates))
+                    || (this.CenterCoordinates == resizeLayer.CenterCoordinates))
+                && this.MaxSize == resizeLayer.MaxSize
+                && ((this.RestrictedSizes != null
+                    && resizeLayer.RestrictedSizes != null
+                    && this.RestrictedSizes.SequenceEqual(resizeLayer.RestrictedSizes))
+                    || (this.RestrictedSizes == resizeLayer.RestrictedSizes))
+                && this.AnchorPoint == resizeLayer.AnchorPoint;
         }
 
         /// <summary>
-        /// Returns a hash code value that represents this object.
+        /// Returns the hash code for this instance.
         /// </summary>
         /// <returns>
-        /// A hash code that represents this object.
+        /// A 32-bit signed integer that is the hash code for this instance.
         /// </returns>
         public override int GetHashCode()
         {
-            return this.Size.GetHashCode() +
-                this.ResizeMode.GetHashCode() +
-                this.AnchorPosition.GetHashCode() +
-                this.Upscale.GetHashCode();
+            unchecked
+            {
+                int hashCode = this.Size.GetHashCode();
+                hashCode = (hashCode * 397) ^ this.MaxSize.GetHashCode();
+                hashCode = (hashCode * 397) ^ (this.RestrictedSizes?.GetHashCode() ?? 0);
+                hashCode = (hashCode * 397) ^ (int)this.ResizeMode;
+                hashCode = (hashCode * 397) ^ (int)this.AnchorPosition;
+                hashCode = (hashCode * 397) ^ this.Upscale.GetHashCode();
+                hashCode = (hashCode * 397) ^ (this.CenterCoordinates?.GetHashCode() ?? 0);
+                hashCode = (hashCode * 397) ^ this.AnchorPoint.GetHashCode();
+                return hashCode;
+            }
         }
     }
 }

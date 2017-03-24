@@ -1,6 +1,6 @@
 ﻿// --------------------------------------------------------------------------------------------------------------------
-// <copyright file="Format.cs" company="James South">
-//   Copyright (c) James South.
+// <copyright file="Format.cs" company="James Jackson-South">
+//   Copyright (c) James Jackson-South.
 //   Licensed under the Apache License, Version 2.0.
 // </copyright>
 // <summary>
@@ -41,13 +41,7 @@ namespace ImageProcessor.Web.Processors
         /// <summary>
         /// Gets the regular expression to search strings for.
         /// </summary>
-        public Regex RegexPattern
-        {
-            get
-            {
-                return QueryRegex;
-            }
-        }
+        public Regex RegexPattern => QueryRegex;
 
         /// <summary>
         /// Gets the order in which this processor is to be used in a chain.
@@ -57,7 +51,7 @@ namespace ImageProcessor.Web.Processors
         /// <summary>
         /// Gets the associated graphics processor.
         /// </summary>
-        public IGraphicsProcessor Processor { get; private set; }
+        public IGraphicsProcessor Processor { get; }
 
         /// <summary>
         /// The position in the original string where the first character of the captured substring was found.
@@ -70,28 +64,16 @@ namespace ImageProcessor.Web.Processors
         /// </returns>
         public int MatchRegexIndex(string queryString)
         {
-            int index = 0;
-
-            // Set the sort order to max to allow filtering.
             this.SortOrder = int.MaxValue;
+            Match match = this.RegexPattern.Match(queryString);
 
-            foreach (Match match in this.RegexPattern.Matches(queryString))
+            if (match.Success)
             {
-                if (match.Success)
+                ISupportedImageFormat format = this.ParseFormat(match.Value.Split('=')[1]);
+                if (format != null)
                 {
-                    if (index == 0)
-                    {
-                        // Set the index on the first instance only.
-                        this.SortOrder = match.Index;
-
-                        ISupportedImageFormat format = this.ParseFormat(match.Value.Split('=')[1]);
-                        if (format != null)
-                        {
-                            this.Processor.DynamicParameter = format;
-                        }
-                    }
-
-                    index += 1;
+                    this.SortOrder = match.Index;
+                    this.Processor.DynamicParameter = format;
                 }
             }
 
@@ -108,7 +90,7 @@ namespace ImageProcessor.Web.Processors
         {
             StringBuilder stringBuilder = new StringBuilder();
 
-            // png8 is a special case for determining indexed pngs.
+            // png8 is a special case for determining indexed png's.
             stringBuilder.Append("format=(png8");
             foreach (ISupportedImageFormat imageFormat in ImageProcessorBootstrapper.Instance.SupportedImageFormats)
             {

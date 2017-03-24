@@ -1,6 +1,6 @@
 ﻿// --------------------------------------------------------------------------------------------------------------------
-// <copyright file="TextLayer.cs" company="James South">
-//   Copyright (c) James South.
+// <copyright file="TextLayer.cs" company="James Jackson-South">
+//   Copyright (c) James Jackson-South.
 //   Licensed under the Apache License, Version 2.0.
 // </copyright>
 // <summary>
@@ -19,35 +19,7 @@ namespace ImageProcessor.Imaging
     public class TextLayer
     {
         #region Fields
-        /// <summary>
-        /// The color to render the text.
-        /// </summary>
-        private Color textColor = Color.Black;
 
-        /// <summary>
-        /// The opacity at which to render the text.
-        /// </summary>
-        private int opacity = 100;
-
-        /// <summary>
-        /// The font style to render the text.
-        /// </summary>
-        private FontStyle fontStyle = FontStyle.Regular;
-
-        /// <summary>
-        /// The font family to render the text.
-        /// </summary>
-        private FontFamily fontFamily = new FontFamily(GenericFontFamilies.SansSerif);
-
-        /// <summary>
-        /// The font size to render the text.
-        /// </summary>
-        private int fontSize = 48;
-
-        /// <summary>
-        /// The position to start creating the text from.
-        /// </summary>
-        private Point position = Point.Empty;
         #endregion
 
         #region Properties
@@ -62,11 +34,7 @@ namespace ImageProcessor.Imaging
         /// <para>Defaults to black.</para>
         /// </remarks>
         /// </summary>
-        public Color FontColor
-        {
-            get { return this.textColor; }
-            set { this.textColor = value; }
-        }
+        public Color FontColor { get; set; } = Color.Black;
 
         /// <summary>
         /// Gets or sets the name of the font family.
@@ -74,11 +42,7 @@ namespace ImageProcessor.Imaging
         /// <para>Defaults to generic sans-serif font family.</para>
         /// </remarks>
         /// </summary>
-        public FontFamily FontFamily
-        {
-            get { return this.fontFamily; }
-            set { this.fontFamily = value; }
-        }
+        public FontFamily FontFamily { get; set; } = new FontFamily(GenericFontFamilies.SansSerif);
 
         /// <summary>
         /// Gets or sets the size of the font in pixels.
@@ -86,11 +50,7 @@ namespace ImageProcessor.Imaging
         /// <para>Defaults to 48 pixels.</para>
         /// </remarks>
         /// </summary>  
-        public int FontSize
-        {
-            get { return this.fontSize; }
-            set { this.fontSize = value; }
-        }
+        public int FontSize { get; set; } = 48;
 
         /// <summary>
         /// Gets or sets the FontStyle of the text layer.
@@ -98,34 +58,32 @@ namespace ImageProcessor.Imaging
         /// <para>Defaults to regular.</para>
         /// </remarks>
         /// </summary>
-        public FontStyle Style
-        {
-            get { return this.fontStyle; }
-            set { this.fontStyle = value; }
-        }
+        public FontStyle Style { get; set; } = FontStyle.Regular;
 
         /// <summary>
         /// Gets or sets the Opacity of the text layer.
         /// </summary>
-        public int Opacity
-        {
-            get { return this.opacity; }
-            set { this.opacity = value; }
-        }
+        public int Opacity { get; set; } = 100;
 
         /// <summary>
         /// Gets or sets the Position of the text layer.
         /// </summary>
-        public Point Position
-        {
-            get { return this.position; }
-            set { this.position = value; }
-        }
+        public Point? Position { get; set; }
 
         /// <summary>
         /// Gets or sets a value indicating whether a DropShadow should be drawn.
         /// </summary>
         public bool DropShadow { get; set; }
+
+        /// <summary>
+        /// Gets or sets a value indicating whether the text should be rendered vertically.
+        /// </summary>
+        public bool Vertical { get; set; }
+
+        /// <summary>
+        /// Gets or sets a value indicating whether the text should be rendered right to left.
+        /// </summary>
+        public bool RightToLeft { get; set; }
         #endregion
 
         /// <summary>
@@ -156,25 +114,33 @@ namespace ImageProcessor.Imaging
                 && this.Style == textLayer.Style
                 && this.DropShadow == textLayer.DropShadow
                 && this.Opacity == textLayer.Opacity
-                && this.Position == textLayer.Position;
+                && this.Position == textLayer.Position
+                && this.Vertical == textLayer.Vertical
+                && this.RightToLeft == textLayer.RightToLeft;
         }
 
         /// <summary>
-        /// Returns a hash code value that represents this object.
+        /// Returns the hash code for this instance.
         /// </summary>
         /// <returns>
-        /// A hash code that represents this object.
+        /// A 32-bit signed integer that is the hash code for this instance.
         /// </returns>
         public override int GetHashCode()
         {
-            return this.Text.GetHashCode() +
-                this.FontColor.GetHashCode() +
-                this.FontFamily.GetHashCode() +
-                this.FontSize.GetHashCode() +
-                this.Style.GetHashCode() +
-                this.DropShadow.GetHashCode() +
-                this.Opacity.GetHashCode() +
-                this.Position.GetHashCode();
+            unchecked
+            {
+                int hashCode = this.Text?.GetHashCode() ?? 0;
+                hashCode = (hashCode * 397) ^ this.DropShadow.GetHashCode();
+                hashCode = (hashCode * 397) ^ (this.FontFamily?.GetHashCode() ?? 0);
+                hashCode = (hashCode * 397) ^ (int)this.Style;
+                hashCode = (hashCode * 397) ^ this.FontColor.GetHashCode();
+                hashCode = (hashCode * 397) ^ this.Opacity;
+                hashCode = (hashCode * 397) ^ this.FontSize;
+                hashCode = (hashCode * 397) ^ this.Position.GetHashCode();
+                hashCode = (hashCode * 397) ^ this.Vertical.GetHashCode();
+                hashCode = (hashCode * 397) ^ this.RightToLeft.GetHashCode();
+                return hashCode;
+            }
         }
     }
 }

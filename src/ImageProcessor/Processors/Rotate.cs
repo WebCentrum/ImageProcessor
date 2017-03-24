@@ -1,6 +1,6 @@
 ﻿// --------------------------------------------------------------------------------------------------------------------
-// <copyright file="Rotate.cs" company="James South">
-//   Copyright (c) James South.
+// <copyright file="Rotate.cs" company="James Jackson-South">
+//   Copyright (c) James Jackson-South.
 //   Licensed under the Apache License, Version 2.0.
 // </copyright>
 // <summary>
@@ -13,9 +13,12 @@ namespace ImageProcessor.Processors
     using System;
     using System.Collections.Generic;
     using System.Drawing;
-    using System.Drawing.Drawing2D;
+    using System.Drawing.Imaging;
+    using System.Linq;
 
     using ImageProcessor.Common.Exceptions;
+    using ImageProcessor.Imaging.Helpers;
+    using ImageProcessor.Imaging.MetaData;
 
     /// <summary>
     /// Encapsulates methods to rotate an image.
@@ -60,37 +63,36 @@ namespace ImageProcessor.Processors
         /// </returns>
         public Image ProcessImage(ImageFactory factory)
         {
-            Bitmap newImage = null;
             Image image = factory.Image;
 
             try
             {
-                int angle = this.DynamicParameter;
+                float angle = this.DynamicParameter;
 
                 // Center of the image
                 float rotateAtX = Math.Abs(image.Width / 2);
                 float rotateAtY = Math.Abs(image.Height / 2);
 
                 // Create a rotated image.
-                newImage = this.RotateImage(image, rotateAtX, rotateAtY, angle);
+                image = this.RotateImage(image, rotateAtX, rotateAtY, angle);
 
-                image.Dispose();
-                image = newImage;
+                if (factory.PreserveExifData && factory.ExifPropertyItems.Any())
+                {
+                    // Set the width EXIF data.
+                    factory.SetPropertyItem(ExifPropertyTag.ImageWidth, (ushort)image.Width);
+
+                    // Set the height EXIF data.
+                    factory.SetPropertyItem(ExifPropertyTag.ImageHeight, (ushort)image.Height);
+                }
+
+                return image;
             }
             catch (Exception ex)
             {
-                if (newImage != null)
-                {
-                    newImage.Dispose();
-                }
-
                 throw new ImageProcessingException("Error processing image with " + this.GetType().Name, ex);
             }
-
-            return image;
         }
 
-        #region Private Methods
         /// <summary>
         /// Rotates an image to the given angle at the given position.
         /// </summary>
@@ -104,63 +106,20 @@ namespace ImageProcessor.Processors
         /// </remarks>
         private Bitmap RotateImage(Image image, float rotateAtX, float rotateAtY, float angle)
         {
-            int width, height, x, y;
+            Rectangle newSize = ImageMaths.GetBoundingRotatedRectangle(image.Width, image.Height, angle);
 
-            // Degrees to radians according to Google. 
-            const double DegreeToRadian = 0.0174532925;
-
-            double widthAsDouble = image.Width;
-            double heightAsDouble = image.Height;
-
-            // Allow for angles over 180
-            if (angle > 180)
-            {
-                angle = angle - 360;
-            }
-
-            double degrees = Math.Abs(angle);
-
-            if (degrees <= 90)
-            {
-                double radians = DegreeToRadian * degrees;
-                double radiansSin = Math.Sin(radians);
-                double radiansCos = Math.Cos(radians);
-                width = (int)((heightAsDouble * radiansSin) + (widthAsDouble * radiansCos));
-                height = (int)((widthAsDouble * radiansSin) + (heightAsDouble * radiansCos));
-                x = (width - image.Width) / 2;
-                y = (height - image.Height) / 2;
-            }
-            else
-            {
-                degrees -= 90;
-                double radians = DegreeToRadian * degrees;
-                double radiansSin = Math.Sin(radians);
-                double radiansCos = Math.Cos(radians);
-
-                // Fix the 270 error
-                if (Math.Abs(radiansCos - -1.0D) < 0.00001)
-                {
-                    radiansCos = 1;
-                }
-
-                width = (int)((widthAsDouble * radiansSin) + (heightAsDouble * radiansCos));
-                height = (int)((heightAsDouble * radiansSin) + (widthAsDouble * radiansCos));
-                x = (width - image.Width) / 2;
-                y = (height - image.Height) / 2;
-            }
+            int x = (newSize.Width - image.Width) / 2;
+            int y = (newSize.Height - image.Height) / 2;
 
             // Create a new empty bitmap to hold rotated image
-            Bitmap newImage = new Bitmap(width, height);
+            Bitmap newImage = new Bitmap(newSize.Width, newSize.Height, PixelFormat.Format32bppPArgb);
             newImage.SetResolution(image.HorizontalResolution, image.VerticalResolution);
 
             // Make a graphics object from the empty bitmap
             using (Graphics graphics = Graphics.FromImage(newImage))
             {
                 // Reduce the jagged edge.
-                graphics.SmoothingMode = SmoothingMode.HighQuality;
-                graphics.InterpolationMode = InterpolationMode.HighQualityBicubic;
-                graphics.PixelOffsetMode = PixelOffsetMode.HighQuality;
-                graphics.CompositingQuality = CompositingQuality.HighQuality;
+                GraphicsHelper.SetGraphicsOptions(graphics);
 
                 // Put the rotation point in the "center" of the image
                 graphics.TranslateTransform(rotateAtX + x, rotateAtY + y);
@@ -172,11 +131,11 @@ namespace ImageProcessor.Processors
                 graphics.TranslateTransform(-rotateAtX - x, -rotateAtY - y);
 
                 // Draw passed in image onto graphics object
-                graphics.DrawImage(image, new PointF(0 + x, 0 + y));
+                graphics.DrawImage(image, new PointF(x, y));
             }
 
+            image.Dispose();
             return newImage;
         }
-        #endregion
     }
 }

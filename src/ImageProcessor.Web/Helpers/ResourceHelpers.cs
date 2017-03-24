@@ -1,6 +1,6 @@
 ﻿// --------------------------------------------------------------------------------------------------------------------
-// <copyright file="ResourceHelpers.cs" company="James South">
-//   Copyright (c) James South.
+// <copyright file="ResourceHelpers.cs" company="James Jackson-South">
+//   Copyright (c) James Jackson-South.
 //   Licensed under the Apache License, Version 2.0.
 // </copyright>
 // <summary>
@@ -14,6 +14,10 @@ namespace ImageProcessor.Web.Helpers
     using System.Reflection;
     using System.Text;
 
+    using ImageProcessor.Web.Caching;
+
+    using Microsoft.IO;
+
     /// <summary>
     /// Provides helper methods for working with resources.
     /// </summary>
@@ -22,15 +26,9 @@ namespace ImageProcessor.Web.Helpers
         /// <summary>
         /// Converts an assembly resource into a string.
         /// </summary>
-        /// <param name="resource">
-        /// The resource.
-        /// </param>
-        /// <param name="assembly">
-        /// The assembly.
-        /// </param>
-        /// <param name="encoding">
-        /// The character encoding to return the resource in.
-        /// </param>
+        /// <param name="resource">The resource.</param>
+        /// <param name="assembly">The assembly.</param>
+        /// <param name="encoding">The character encoding to return the resource in.</param>
         /// <returns>
         /// The <see cref="string"/>.
         /// </returns>
@@ -39,14 +37,11 @@ namespace ImageProcessor.Web.Helpers
             assembly = assembly ?? Assembly.GetExecutingAssembly();
             encoding = encoding ?? Encoding.UTF8;
 
-            using (MemoryStream ms = new MemoryStream())
+            using (MemoryStream ms = MemoryStreamPool.Shared.GetStream())
             {
                 using (Stream manifestResourceStream = assembly.GetManifestResourceStream(resource))
                 {
-                    if (manifestResourceStream != null)
-                    {
-                        manifestResourceStream.CopyTo(ms);
-                    }
+                    manifestResourceStream?.CopyTo(ms);
                 }
 
                 return encoding.GetString(ms.GetBuffer()).Replace('\0', ' ').Trim();

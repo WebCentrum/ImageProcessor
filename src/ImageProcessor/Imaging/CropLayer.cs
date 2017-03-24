@@ -1,6 +1,6 @@
 ﻿// --------------------------------------------------------------------------------------------------------------------
-// <copyright file="CropLayer.cs" company="James South">
-//   Copyright (c) James South.
+// <copyright file="CropLayer.cs" company="James Jackson-South">
+//   Copyright (c) James Jackson-South.
 //   Licensed under the Apache License, Version 2.0.
 // </copyright>
 // <summary>
@@ -20,21 +20,11 @@ namespace ImageProcessor.Imaging
         /// <summary>
         /// Initializes a new instance of the <see cref="CropLayer"/> class.
         /// </summary>
-        /// <param name="left">
-        /// The left coordinate of the crop layer.
-        /// </param>
-        /// <param name="top">
-        /// The top coordinate of the crop layer.
-        /// </param>
-        /// <param name="right">
-        /// The right coordinate of the crop layer.
-        /// </param>
-        /// <param name="bottom">
-        /// The bottom coordinate of the crop layer.
-        /// </param>
-        /// <param name="cropMode">
-        /// The <see cref="CropMode"/>.
-        /// </param>
+        /// <param name="left">The left coordinate of the crop layer.</param>
+        /// <param name="top">The top coordinate of the crop layer.</param>
+        /// <param name="right">The right coordinate of the crop layer.</param>
+        /// <param name="bottom">The bottom coordinate of the crop layer.</param>
+        /// <param name="cropMode">The <see cref="CropMode"/>.</param>
         /// <remarks>
         /// If the <see cref="CropMode"/> is set to <value>CropMode.Percentage</value> then the four coordinates
         /// become percentages to reduce from each edge.
@@ -107,17 +97,22 @@ namespace ImageProcessor.Imaging
         }
 
         /// <summary>
-        /// Returns a hash code for this instance.
+        /// Serves as a hash function for a particular type. 
         /// </summary>
         /// <returns>
-        /// A hash code for this instance, suitable for use in hashing algorithms 
-        /// and data structures like a hash table. 
+        /// A hash code for the current <see cref="T:System.Object"/>.
         /// </returns>
         public override int GetHashCode()
         {
-            return this.Top.GetHashCode() + this.Right.GetHashCode() +
-                   this.Bottom.GetHashCode() + this.Left.GetHashCode() +
-                   this.CropMode.GetHashCode();
+            unchecked
+            {
+                int hashCode = this.Left.GetHashCode();
+                hashCode = (hashCode * 397) ^ this.Top.GetHashCode();
+                hashCode = (hashCode * 397) ^ this.Right.GetHashCode();
+                hashCode = (hashCode * 397) ^ this.Bottom.GetHashCode();
+                hashCode = (hashCode * 397) ^ (int)this.CropMode;
+                return hashCode;
+            }
         }
     }
 }
